@@ -1,4 +1,4 @@
-import { CONFIG, GATES, WEAPONS, ObjectPool, squadOffset, clamp } from './game.js';
+import { CONFIG, WEAPONS, ObjectPool, squadOffset, clamp } from './game.js';
 
 const FONT = 'system-ui, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif';
 const C = { lime: '#d9ff68', cyan: '#72ecff', red: '#ff6488' };
@@ -167,10 +167,8 @@ export class Renderer {
     if (game.boss?.attack) this.warning(game.boss.attack, game.time, false);
     if (this.beam) this.drawBeam(this.beam);
     const objects = [], idle = game.mode === 'ready';
-    if (idle) {
-      objects.push({ ...(game.level?.gates?.[0] || GATES[0]), kind: 'gate', z: 290 });
-      for (let i = 0; i < 6; i++) objects.push({ kind: 'enemy', x: (i % 3 - 1) * .27 + .12, z: 580 + Math.floor(i / 3) * 90, hp: 4, maxHP: 4, hit: 0, phase: i });
-    } else {
+    // The ready overlay owns the center: keep its instructions clear of demo gates.
+    if (!idle) {
       for (const gate of game.gates) if (!gate.resolved) objects.push({ ...gate, kind: 'gate' });
       for (const enemy of game.enemies.items) if (enemy.active) objects.push({ ...enemy, kind: 'enemy' });
       if (game.boss && game.mode !== 'won') objects.push({ ...game.boss, kind: 'boss' });

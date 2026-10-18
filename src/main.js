@@ -150,7 +150,7 @@ function syncUI() {
     $('result-best').textContent = bestLabel(level.id);
     $('level-summary').textContent = `${level.subtitle} · ${bestLabel(level.id)}`;
     $('start-label').textContent = won ? '再爽一局' : '立即再来';
-    $('next-level-button').textContent = LEVELS.indexOf(level) === LEVELS.length - 1 ? '回到第一关 ↗' : '挑战下一关 ↗';
+    $('next-level-button').textContent = LEVELS.indexOf(level) === LEVELS.length - 1 ? '回到第一关 →' : '挑战下一关 →';
     $('overlay-note').textContent = '关卡按钮可随时换路线 · 没有局外养成';
   }
 }
