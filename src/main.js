@@ -157,7 +157,7 @@ function frame(now) {
       if (event.type === 'gateGrow' && event.value === 0) toast('打成零了！继续开火，让门变绿', 1);
       if (event.type === 'missGate') toast('从中间绕过了门', .9);
       if (event.type === 'bossPhase') toast('守卫半血 · 预警变快', 1.4);
-      if (event.type === 'hurt') toast(`${event.amount} 位队友 · 留意红色预警`, .8);
+      if (event.type === 'hurt') toast(`${event.amount} 位队友 · ${event.source === 'gate' ? '数字门扣员，先打绿再通过' : event.source === 'boss' ? '离开红色预警区' : '敌群贴近了，横移清路'}`, .8);
       if (event.type === 'boss') toast('终点守卫 · 对准它，躲开红色区域', 2.2);
       if (event.type === 'warning') toast('红色区域即将开火，向旁边躲！', 1.2);
     }

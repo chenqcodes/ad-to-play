@@ -103,7 +103,7 @@ export class Renderer {
       const direction = i % 2 ? 1 : -1;
       this.particles.take({ kind: 'chunk', x: p.x + direction * size * .12, y: p.y - size * (.6 + i * .18),
         vx: this.reducedMotion ? 0 : direction * (11 + (e.enemyId || 0) % 7) * p.s,
-        vy: this.reducedMotion ? 0 : -12 * p.s, size: size * (e.heavy ? .32 : .3),
+        vy: this.reducedMotion ? 0 : -12 * p.s, size: size * (e.heavy ? .24 : .18),
         life: this.reducedMotion ? .16 : .25 + ((e.enemyId || 0) % 4) * .018,
         maxLife: this.reducedMotion ? .16 : .31, color: e.heavy ? '#3d3740' : ENEMY_INK });
     }

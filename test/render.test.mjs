@@ -300,18 +300,18 @@ test('nearby gates split depth batches at exact z even within one slice', () => 
   assert.ok(order.slice(barrier + 1).every(([, z]) => z < 205));
 });
 
-test('192-enemy plus full projectile/FX/squad stress frame stays under 600 Canvas draw calls', t => {
+test('full enemy/projectile/FX/squad stress frame stays under 600 Canvas draw calls', t => {
   for (const reduced of [false, true]) {
     const { renderer: r, calls } = renderer(reduced), g = new Game(); g.start();
     g.squad = CONFIG.maxSquad; g.weaponTier = 2; g.weapon = 'scatter';
-    for (let id = 0; id < 192; id++) g.enemies.take({ id, x: (id % 16 - 7.5) * .105, z: 160 + Math.floor(id / 16) * 22, hp: 1, maxHP: 2, heavy: id % 48 === 0, phase: id, hit: id % 5 ? 0 : .04 });
+    for (let id = 0; id < CONFIG.maxEnemies; id++) g.enemies.take({ id, x: (id % 16 - 7.5) * .105, z: 160 + Math.floor(id / 16) * 22, hp: 1, maxHP: 2, heavy: id % 48 === 0, phase: id, hit: id % 5 ? 0 : .04 });
     for (let i = 0; i < CONFIG.maxBullets; i++) g.bullets.take({ x: (i % 25 - 12) * .06, z: 30 + (i % 32) * 24, weapon: 'scatter', tier: 2, radius: .035, vx: (i % 7 - 3) * .38, speed: 1150 });
     for (let i = 0; i < r.particles.capacity; i++) r.particles.take({ kind: 'chunk', x: i % 320, y: 150 + i % 200, size: 3, color: i % 2 ? '#152332' : '#3d3740', life: .1 + (i % 4) * .04, maxLife: .31 });
     r.event({ type: 'fire', x: 0, weapon: 'scatter', tier: 2 });
     calls.length = 0; r.draw(g, 10);
     const count = calls.filter(([name]) => ['fill', 'stroke', 'fillRect', 'strokeRect', 'fillText', 'drawImage'].includes(name)).length;
     t.diagnostic(`${reduced ? 'Reduced' : 'Normal'} motion: ${count} Canvas draws, ${r.drawStats.enemyBatches} enemy batches, ${r.drawStats.bulletBatches} projectile batches, ${CONFIG.maxBullets} projectiles`);
-    assert.equal(r.drawStats.enemies, 192); assert.equal(r.drawStats.bullets, CONFIG.maxBullets);
+    assert.equal(r.drawStats.enemies, CONFIG.maxEnemies); assert.equal(r.drawStats.bullets, CONFIG.maxBullets);
     assert.ok(count < 600, `Measured ${count} Canvas draw calls`);
     assert.ok(r.drawStats.enemyBatches < 45);
   }

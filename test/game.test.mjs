@@ -393,3 +393,33 @@ test('all level routes expose true dense packs and large clearing bursts, with s
   assert.ok(opening.aliveBefore >= 100); assert.ok(opening.killsNextSecond >= 60);
   const final = complete('good').summary.supportMoments[1]; assert.ok(final.aliveBefore >= 50); assert.ok(final.killsNextSecond >= 50);
 });
+
+test('all tiers, squad sizes and rapid levels retain the complete per-member firing contract', () => {
+  for (const weapon of Object.keys(WEAPONS)) for (const tier of [0, 1, 2]) for (const count of [1, 4, 17, 42]) for (const rapid of [0, 1, 2]) {
+    const g = bare(); g.setWeapon(weapon); if (tier) g.setPowerTier(tier); g.squad = count; g.rapid = rapid;
+    assert.equal(g.fire(), true); const active = g.bullets.items.filter(b => b.active), w = g.weaponDefinition;
+    assert.equal(active.length, count * w.pellets);
+    for (let member = 0; member < count; member++) {
+      const projectiles = active.filter(b => b.member === member), origin = squadOffset(member, count);
+      assert.equal(projectiles.length, w.pellets);
+      for (const b of projectiles) { close(b.x, origin.x); close(b.z, 42 + origin.z); assert.equal(b.tier, tier); }
+    }
+    close(g.fireInterval, w.interval / (1 + rapid * CONFIG.rapidBonus));
+  }
+});
+
+test('tiered real rounds still hit the nearest target and numeric gates absorb their entire remaining pierce', () => {
+  for (const weapon of Object.keys(WEAPONS)) for (const tier of [0, 1, 2]) {
+    const g = bare(); g.fireTimer = 999; g.setWeapon(weapon); if (tier) g.setPowerTier(tier); g.fireTimer = 999;
+    const w = g.weaponDefinition;
+    const near = enemy(g, { x: -.49, z: 180 }), behind = enemy(g, { x: -.49, z: 260 });
+    g.spawnGate({ z: 220, left: recruit(-2, 8, 1), right: recruit(3) });
+    shot(g, { x: -.49, z: 150, weapon, tier, damage: w.damage, radius: w.radius, pierceLeft: w.pierce }); g.update(.15);
+    close(near.hp, 100 - w.damage); assert.equal(behind.hp, 100, `${weapon}/${tier}`);
+  }
+});
+
+test('a catch-up jump does not resurrect expired hordes or exhaust the enemy pool', () => {
+  const g = new Game(); g.start(); g.time = 42; assert.doesNotThrow(() => g.update(CONFIG.step));
+  assert.equal(g.enemies.count, 0); assert.equal(g.pendingEnemies.length, 0); assert.ok(g.boss);
+});

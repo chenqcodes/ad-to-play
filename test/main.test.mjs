@@ -145,3 +145,13 @@ test('support anticipation, tier steps and immediate retry remain in sync', asyn
   assert.equal(h.elements.get('power-step-1').classes.has('active'), false);
   assert.match(h.elements.get('support-label').textContent, /7 秒后/);
 });
+
+test('damage feedback names the actual hazard rather than always blaming a red warning', async () => {
+  const h = await harness(); h.click('start-button');
+  h.game.addSquad(-1, 'enemy'); h.frame();
+  assert.match(h.elements.get('toast').textContent, /敌群贴近/);
+  h.game.addSquad(-1, 'boss'); h.frame();
+  assert.match(h.elements.get('toast').textContent, /红色预警/);
+  h.game.addSquad(-1, 'gate'); h.frame();
+  assert.match(h.elements.get('toast').textContent, /数字门扣员/);
+});
