@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#10191f">
-  <meta name="description" content="广告里那种简单好玩的小游戏，打开就能玩。霓虹小队：左右拖动，自动开火，穿过人数门，击败终点 Boss。">
+  <meta name="description" content="广告里那种简单好玩的小游戏，打开就能玩。霓虹小队：左右拖动，自动开火，招人或升级连射，击败终点 Boss。">
   <title>霓虹小队 · Ad to Play</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
@@ -21,11 +21,11 @@
         <div class="eyebrow"><span>001</span> ONE FINGER. FULL FIRE.</div>
         <h1 id="game-title">霓虹<br><span>小队<span class="title-spark" aria-hidden="true">✷</span></span></h1>
         <p class="lead">广告里的那一关。<br>这次，真的能玩。</p>
-        <p class="description">一根手指，一路开火。<br>拉上更多队友，把终点打个通透。</p>
+        <p class="description">一根手指，一路开火。<br>招人还是连射？选你的火力路线。</p>
         <div class="game-tags" aria-label="游戏特点"><span>约 1 分钟</span><span>零下载</span><span>没有套路</span></div>
         <div class="instruction-list">
           <div><span class="instruction-symbol">↔</span><p><strong>左右拖动</strong><small>松手也会自动开火</small></p></div>
-          <div><span class="instruction-symbol add">＋</span><p><strong>选对人数门</strong><small>每多一个人，就多一份火力</small></p></div>
+          <div><span class="instruction-symbol add">＋</span><p><strong>选择火力路线</strong><small>绿门招人，蓝门让全队连射</small></p></div>
           <div><span class="instruction-symbol boss">⌁</span><p><strong>打倒终点 Boss</strong><small>红色预警出现时，记得躲开</small></p></div>
         </div>
         <p class="keyboard-hint">电脑也能玩 · ← → / A D 移动 · 空格暂停</p>
@@ -34,21 +34,21 @@
         <div class="game-frame" id="game-frame">
           <canvas id="game" tabindex="0" aria-label="霓虹小队游戏画面。开始后在画面左右拖动，或使用方向键移动。"></canvas>
           <div class="hud" id="hud">
-            <div class="squad-meter"><span class="hud-label">小队人数</span><div><span id="squad-count">03</span><span class="unit">人</span></div></div>
-            <div class="run-progress"><div class="progress-label"><span id="phase-label">霓虹大道</span><span id="time-label">00:00</span></div><div class="progress-track"><div id="progress-fill"></div></div></div>
+            <div class="squad-meter"><span class="hud-label">小队人数</span><div><span id="squad-count">04</span><span class="unit">人</span></div></div>
+            <div class="run-progress"><div class="progress-label"><span id="phase-label">霓虹大道</span><span id="time-label">00:00</span></div><div class="progress-track"><div id="progress-fill"></div></div><div id="fire-rate" class="fire-rate">射速 ×1.00</div></div>
             <div class="hud-actions"><button id="sound-button" class="icon-button" type="button" aria-label="开启声音" aria-pressed="true" title="开启声音">♪<span id="sound-mark">×</span></button><button id="pause-button" class="icon-button" type="button" aria-label="暂停游戏" title="暂停游戏" disabled>Ⅱ</button></div>
           </div>
-          <div id="boss-hud" class="boss-hud" hidden><div><span>终点守卫 / THE BLOCKER</span><span id="boss-percent">100%</span></div><div class="boss-track"><div id="boss-fill"></div></div></div>
+          <div id="boss-hud" class="boss-hud" hidden><div><span id="boss-name">终点守卫</span><span id="boss-percent">100%</span></div><div class="boss-track"><div id="boss-fill"></div></div></div>
           <div id="toast" class="game-toast" aria-live="polite"></div>
           <div class="overlay" id="overlay">
-            <div class="start-copy" id="start-copy"><span class="mini-label">READY WHEN YOU ARE</span><h2>左右一划<br><em>全队开火。</em></h2><p>过绿门，加队友。躲红门，冲终点。</p></div>
+            <div class="start-copy" id="start-copy"><span class="mini-label">READY WHEN YOU ARE</span><h2>左右一划<br><em>全队开火。</em></h2><p>绿门招人 · 蓝门连射 · 红门减员</p></div>
             <div class="result-copy" id="result-copy" hidden><span class="mini-label" id="result-eyebrow"></span><h2 id="result-title"></h2><p id="result-detail"></p><div class="result-stats" id="result-stats"></div></div>
             <div class="overlay-bottom"><button class="start-button" id="start-button" type="button"><span id="start-label">开始这一关</span><span aria-hidden="true">↗</span></button><p id="overlay-note">无需登录 · 失败就再来一局</p></div>
           </div>
           <div class="drag-hint" id="drag-hint" hidden><span>←</span> 按住画面，左右拖动 <span>→</span></div>
           <span class="stage-corner" aria-hidden="true">LEVEL 01 / NEON AVENUE</span>
         </div>
-        <div class="frame-caption"><span><i></i> 一个小队，一条路，一个 Boss</span><span>原创试玩版 0.1</span></div>
+        <div class="frame-caption"><span><i></i> 一个小队，一条路，一个 Boss</span><span>玩法试玩版 0.2</span></div>
       </section>
     </main>
     <footer class="site-footer"><span>简单的快乐，直接开始。</span><span>不登录 · 无广告 · 无内购</span></footer>
