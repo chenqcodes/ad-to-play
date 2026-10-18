@@ -33,6 +33,7 @@ async function harness() {
   class Button extends Element {}
   const elements = new Map([...html.matchAll(/<([\w-]+)[^>]*\bid="([^"]+)"/g)].map(([, tag, id]) => [id, new (tag === 'button' ? Button : Element)(id)]));
   let callback, now = 1000, audioContexts = 0;
+  const stored = new Map(), vibrations = [];
   class Audio {
     constructor() { audioContexts++; this.state = 'running'; this.currentTime = 1; this.destination = {}; }
     resume() { this.state = 'running'; return Promise.resolve(); }
@@ -40,7 +41,7 @@ async function harness() {
     createGain() { return { gain: { setValueAtTime: noop, exponentialRampToValueAtTime: noop }, connect: noop, disconnect: noop }; }
   }
   globalThis.document = { hidden: false, getElementById: id => { assert.ok(elements.has(id), `HTML contains #${id}`); return elements.get(id); }, createElement: () => new Element(), addEventListener(name, handler) { on(this, name, handler); } };
-  globalThis.window = { devicePixelRatio: 3, AudioContext: Audio, addEventListener(name, handler) { on(this, name, handler); } };
+  globalThis.window = { localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) }, navigator: { vibrate: duration => vibrations.push(duration) }, devicePixelRatio: 3, AudioContext: Audio, addEventListener(name, handler) { on(this, name, handler); } };
   globalThis.HTMLButtonElement = Button;
   globalThis.matchMedia = () => ({ matches: false });
   globalThis.ResizeObserver = class { observe() {} };
@@ -49,7 +50,7 @@ async function harness() {
   await import(`../src/main.js?harness=${++run}`);
   const frame = (count = 1) => { for (let i = 0; i < count; i++) { now += 1000 / 60; callback(now); } };
   const click = id => dispatch(elements.get(id), 'click');
-  return { elements, frame, click, dispatch, game: window.__NEON_QA__.game, qa: window.__NEON_QA__, get audioContexts() { return audioContexts; } };
+  return { elements, frame, click, dispatch, stored, vibrations, game: window.__NEON_QA__.game, qa: window.__NEON_QA__, get audioContexts() { return audioContexts; } };
 }
 test('HTML IDs, initial HUD and DPR cap integrate without a browser', async () => {
   const h = await harness(); h.frame();
@@ -92,4 +93,37 @@ test('rapid HUD, Boss deadline and immediate retry reset every gameplay field', 
   h.game.finish(false, 'timeout'); h.frame(); assert.equal(h.elements.get('start-label').textContent, '立即再来');
   h.click('start-button'); assert.equal(h.game.squad, 4); assert.equal(h.game.time, 0); assert.equal(h.game.rapid, 0); assert.equal(h.game.targetX, 0); assert.equal(h.game.boss, null);
   assert.equal(h.elements.get('fire-rate').textContent, '射速 ×1.00'); assert.equal(h.elements.get('overlay').hidden, true);
+});
+
+test('all three levels are immediately selectable, but a live run cannot be replaced accidentally', async () => {
+  const h = await harness(); h.click('level-1');
+  assert.equal(h.game.level.id, 'firepower'); assert.equal(h.game.squad, 6);
+  assert.equal(h.elements.get('level-1').attributes['aria-pressed'], 'true');
+  h.click('level-2'); assert.equal(h.game.level.id, 'survival'); assert.equal(h.game.squad, 8);
+  h.click('start-button'); h.click('level-0'); assert.equal(h.game.level.id, 'survival');
+  assert.equal(h.elements.get('level-0').disabled, true);
+  h.game.finish(false, 'gate'); h.frame(); h.click('level-0');
+  assert.equal(h.game.mode, 'ready'); assert.equal(h.game.level.id, 'growth'); assert.equal(h.game.squad, 4);
+});
+test('weapon HUD, next level and local records stay in sync', async () => {
+  const h = await harness(); h.click('start-button');
+  h.game.takeGate({ type: 'weapon', weapon: 'pierce' }); h.frame(2);
+  assert.equal(h.elements.get('weapon-label').textContent, '穿透枪');
+  h.game.time = 51; h.game.finish(true); h.frame(2);
+  assert.equal(h.elements.get('next-level-button').hidden, false);
+  assert.match(h.elements.get('result-best').textContent, /本机最快 51.0/);
+  h.frame(10); const saved = JSON.parse([...h.stored.values()][0]);
+  assert.equal(saved.records.growth.wins, 1);
+  h.click('next-level-button'); assert.equal(h.game.level.id, 'firepower');
+  assert.equal(h.game.mode, 'playing'); assert.equal(h.game.weapon, 'rifle'); assert.equal(h.game.time, 0);
+});
+test('motion and vibration preferences are explicit and vibration is quiet by default', async () => {
+  const h = await harness(); h.click('start-button'); h.game.addSquad(2); h.frame(2);
+  assert.deepEqual(h.vibrations, []);
+  h.elements.get('vibration-setting').checked = true; h.dispatch(h.elements.get('vibration-setting'), 'change');
+  h.game.addSquad(2); h.frame(2); assert.equal(h.vibrations.length, 1);
+  h.elements.get('motion-setting').checked = true; h.dispatch(h.elements.get('motion-setting'), 'change');
+  assert.equal(h.qa.renderer.reducedMotion, true);
+  h.frame(30); h.game.addSquad(2); h.frame(2); assert.equal(h.vibrations.length, 1);
+  const saved = JSON.parse([...h.stored.values()][0]); assert.equal(saved.reducedMotion, true); assert.equal(saved.vibration, true);
 });

@@ -27,7 +27,7 @@ export function pull(level,previous,id){
    if(r.to&&s.open.includes(r.id)&&a.length){s.events.push({type:'fall',from:r.id,to:r.to,items:[...a]});s.rooms[r.to].push(...a);s.rooms[r.id]=[];}
  }
  const exit=s.rooms.exit;
- if(exit.includes('hero')&&exit.filter(i=>i==='gem').length===s.total&&!exit.includes('lava')){s.status='won';s.collected=s.total;s.reason='宝石和探险家都安全到达！';}
+ if(exit.includes('hero')&&exit.filter(i=>i==='gem').length===s.total&&!Object.values(s.rooms).some(a=>a.includes('lava'))){s.status='won';s.collected=s.total;s.reason='宝石和探险家都安全到达！';}
  return s;
 }
 export function solve(level,state=createState(level)){
