@@ -22,3 +22,14 @@ test('saved input is bounded and never used as HTML', () => {
   assert.equal(saved.muted, false); assert.equal(saved.vibration, true); assert.equal(saved.reducedMotion, true);
   assert.deepEqual(saved.records.growth, { wins: 0, bestTime: null, progress: 1, maxSquad: 42 });
 });
+
+test('0.4 preserves player preferences but starts comparable scores for the new balance', () => {
+  const legacy = JSON.stringify({ muted: false, vibration: true, reducedMotion: true, records: { growth: { wins: 30, bestTime: 45, progress: 1, maxSquad: 42 } } });
+  const values = new Map([['ad-to-play:neon:v3', legacy]]);
+  const storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+  const saved = readSaved(storage);
+  assert.equal(saved.muted, false); assert.equal(saved.vibration, true); assert.equal(saved.reducedMotion, true);
+  assert.deepEqual(saved.records, {}); assert.equal(values.get('ad-to-play:neon:v3'), legacy);
+  writeSaved(storage, recordRun(saved, { levelId: 'growth', won: true, time: 49, progress: 1, maxSquad: 30 }));
+  assert.equal(readSaved(storage).records.growth.wins, 1);
+});

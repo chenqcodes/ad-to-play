@@ -19,7 +19,7 @@ async function harness() {
     get: (target, property) => property in target ? target[property] : noop,
   });
   class Element {
-    constructor(id = '') { this.id = id; this.style = {}; this.attributes = {}; this.children = []; this.hidden = false; this.captured = new Set(); this.classes = new Set(); this.classList = { add: value => this.classes.add(value), remove: value => this.classes.delete(value), toggle: (value, enabled) => enabled ? this.classes.add(value) : this.classes.delete(value) }; }
+    constructor(id = '') { this.id = id; this.dataset = {}; this.style = {}; this.attributes = {}; this.children = []; this.hidden = false; this.captured = new Set(); this.classes = new Set(); this.classList = { add: value => this.classes.add(value), remove: value => this.classes.delete(value), toggle: (value, enabled) => enabled ? this.classes.add(value) : this.classes.delete(value) }; }
     addEventListener(name, handler) { on(this, name, handler); }
     setAttribute(name, value) { this.attributes[name] = value; }
     replaceChildren(...children) { this.children = children; }
@@ -89,7 +89,8 @@ test('keyboard, blur and hidden-page pause cannot advance background gameplay', 
 test('rapid HUD, Boss deadline and immediate retry reset every gameplay field', async () => {
   const h = await harness(); h.click('start-button'); h.game.takeGate({ type: 'rapid', value: 1 }); h.frame(2);
   assert.equal(h.elements.get('fire-rate').textContent, '射速 ×1.35');
-  h.game.time = 42; h.frame(2); assert.match(h.elements.get('boss-percent').textContent, /剩 18 秒/);
+  h.game.nextWave = h.game.level.waves.length; h.game.nextGate = h.game.level.gates.length;
+  h.game.time = h.game.level.bossAt; h.frame(2); assert.match(h.elements.get('boss-percent').textContent, /剩 18 秒/);
   h.game.finish(false, 'timeout'); h.frame(); assert.equal(h.elements.get('start-label').textContent, '立即再来');
   h.click('start-button'); assert.equal(h.game.squad, 4); assert.equal(h.game.time, 0); assert.equal(h.game.rapid, 0); assert.equal(h.game.targetX, 0); assert.equal(h.game.boss, null);
   assert.equal(h.elements.get('fire-rate').textContent, '射速 ×1.00'); assert.equal(h.elements.get('overlay').hidden, true);
@@ -126,4 +127,21 @@ test('motion and vibration preferences are explicit and vibration is quiet by de
   assert.equal(h.qa.renderer.reducedMotion, true);
   h.frame(30); h.game.addSquad(2); h.frame(2); assert.equal(h.vibrations.length, 1);
   const saved = JSON.parse([...h.stored.values()][0]); assert.equal(saved.reducedMotion, true); assert.equal(saved.vibration, true);
+});
+
+test('support anticipation, tier steps and immediate retry remain in sync', async () => {
+  const h = await harness(); h.frame();
+  assert.match(h.elements.get('support-label').textContent, /7 秒后/);
+  assert.equal(h.elements.get('power-level').dataset.tier, '0');
+  h.click('start-button'); h.game.setPowerTier(1); h.frame();
+  assert.equal(h.elements.get('power-level').dataset.tier, '1');
+  assert.equal(h.elements.get('power-step-1').classes.has('active'), true);
+  assert.match(h.elements.get('support-label').textContent, /横扫支援/);
+  h.game.setPowerTier(2); h.frame();
+  assert.match(h.elements.get('support-label').textContent, /全火力/);
+  assert.equal(h.elements.get('power-step-2').classes.has('active'), true);
+  h.game.finish(false, 'timeout'); h.frame(); h.click('start-button');
+  assert.equal(h.elements.get('power-level').dataset.tier, '0');
+  assert.equal(h.elements.get('power-step-1').classes.has('active'), false);
+  assert.match(h.elements.get('support-label').textContent, /7 秒后/);
 });

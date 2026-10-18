@@ -1,12 +1,12 @@
-# 0.3 发布清单
+# 0.4 发布清单
 
 ## 提交源码
 
 - 根文件：`.gitignore`、`package.json`、`index.html`、`styles.css`、`README.md`、`ASSETS.md`、`VERIFICATION.md`、`DEPLOYMENT.md`
-- `src/`：game.js、render.js、main.js、storage.js
+- `src/`：game.js、render.js、main.js、storage.js、sound.js
 - `public/`：favicon.svg、_headers
 - `scripts/`：build.mjs、serve.mjs
-- `test/`：game.test.mjs、policies.mjs、main.test.mjs、render.test.mjs、storage.test.mjs、site.test.mjs
+- `test/`：game.test.mjs、policies.mjs、main.test.mjs、render.test.mjs、storage.test.mjs、site.test.mjs、sound.test.mjs
 - `games/pin-rescue/`：index.html、style.css、engine.mjs、main.mjs、README.md、test/engine.test.mjs、test/ui.test.mjs
 
 不提交 `dist/`、运行日志、截图、临时文件或凭据。构建只复制运行必需文件，不发布测试文件。

@@ -21,14 +21,14 @@
         <div class="eyebrow"><span>001</span> ONE FINGER. FULL FIRE.</div>
         <h1 id="game-title">霓虹<br><span>小队<span class="title-spark" aria-hidden="true">✷</span></span></h1>
         <p class="lead">广告里的那一关。<br>这次，真的能玩。</p>
-        <p class="description">一根手指，一路开火。<br>把负数打成正数，选一把顺手的武器。</p>
+        <p class="description">一根手指，一路开火。<br>先顶住逼近的敌潮。<br>等火力展开，一片片扫开。</p>
         <div class="game-tags" aria-label="游戏特点"><span>3 关 × 1 分钟</span><span>零下载</span><span>没有套路</span></div>
         <div class="instruction-list">
           <div><span class="instruction-symbol">↔</span><p><strong>左右拖动</strong><small>松手也会自动开火</small></p></div>
-          <div><span class="instruction-symbol add">＋</span><p><strong>瞄准门，把负数打绿</strong><small>靶门可成长；选人、选武器，都算数</small></p></div>
+          <div><span class="instruction-symbol add">＋</span><p><strong>火力支援，越来越猛</strong><small>7 秒破阵，23 秒进入横扫火力</small></p></div>
           <div><span class="instruction-symbol boss">⌁</span><p><strong>打倒终点 Boss</strong><small>红色预警出现时，记得躲开</small></p></div>
         </div>
-        <div class="weapon-guide" aria-label="三种武器"><span><b>散射</b>扇形清群</span><span><b>穿透</b>一线连击</span><span><b>爆破</b>范围冲击</span></div><a class="second-game-card" href="./games/pin-rescue/"><span>002 · 换个脑回路</span><strong>拉针救援 <i class="card-arrow" aria-hidden="true"></i></strong><small>先看机关，再拔对那一根。</small></a><p class="keyboard-hint">电脑也能玩 · ← → / A D 移动 · 空格暂停</p>
+        <div class="weapon-guide" aria-label="三种武器"><span><b>散射</b>宽扇清群</span><span><b>穿透</b>贯穿整列</span><span><b>爆破</b>连锁爆破</span></div><a class="second-game-card" href="./games/pin-rescue/"><span>002 · 换个脑回路</span><strong>拉针救援 <i class="card-arrow" aria-hidden="true"></i></strong><small>先看机关，再拔对那一根。</small></a><p class="keyboard-hint">电脑也能玩 · ← → / A D 移动 · 空格暂停</p>
       </section>
       <section class="game-column" aria-label="霓虹小队游戏">
         <div class="level-picker" id="level-picker" role="group" aria-label="选择关卡"><button type="button" id="level-0" aria-pressed="true">01 集结</button><button type="button" id="level-1" aria-pressed="false">02 火力</button><button type="button" id="level-2" aria-pressed="false">03 生存</button></div><p class="level-summary" id="level-summary">每一关都能直接玩 · 无需解锁</p><div class="game-frame" id="game-frame">
@@ -38,17 +38,17 @@
             <div class="run-progress"><div class="progress-label"><span id="phase-label">霓虹大道</span><span id="time-label">00:00</span></div><div class="progress-track"><div id="progress-fill"></div></div><div class="weapon-meter"><span id="weapon-label">标准枪</span><span id="fire-rate" class="fire-rate">射速 ×1.00</span></div></div>
             <div class="hud-actions"><button id="sound-button" class="icon-button" type="button" aria-label="开启声音" aria-pressed="true" title="开启声音">♪<span id="sound-mark">×</span></button><button id="pause-button" class="icon-button" type="button" aria-label="暂停游戏" title="暂停游戏" disabled>Ⅱ</button></div>
           </div>
-          <div id="boss-hud" class="boss-hud" hidden><div><span id="boss-name">终点守卫</span><span id="boss-percent">100%</span></div><div class="boss-track"><div id="boss-fill"></div></div></div>
+          <div class="power-hud" id="power-hud"><div><strong id="power-level">单线压制</strong><span id="support-label">7 秒后 · 破阵支援</span></div><div class="power-steps" aria-hidden="true"><i id="power-step-0" class="active"></i><i id="power-step-1"></i><i id="power-step-2"></i></div></div><div id="boss-hud" class="boss-hud" hidden><div><span id="boss-name">终点守卫</span><span id="boss-percent">100%</span></div><div class="boss-track"><div id="boss-fill"></div></div></div>
           <div id="toast" class="game-toast" aria-live="polite"></div>
           <div class="overlay" id="overlay">
-            <div class="start-copy" id="start-copy"><span class="mini-label">READY WHEN YOU ARE</span><h2>左右一划<br><em>全队开火。</em></h2><p id="start-description">对准靶门持续开火，负数也能打成奖励。<br>招人、换枪、躲预警，冲过终点。</p></div>
+            <div class="start-copy" id="start-copy"><span class="mini-label">READY WHEN YOU ARE</span><h2>敌潮压来<br><em>火力，展开。</em></h2><p id="start-description">对准靶门持续开火，负数也能打成奖励。<br>招人、换枪、躲预警，冲过终点。</p></div>
             <div class="result-copy" id="result-copy" hidden><span class="mini-label" id="result-eyebrow"></span><h2 id="result-title"></h2><p id="result-detail"></p><div class="result-stats" id="result-stats"></div><p id="result-route" class="result-route"></p><p id="result-best" class="result-best"></p></div>
             <div class="overlay-bottom"><button class="start-button" id="start-button" type="button"><span id="start-label">开始这一关</span><span class="button-arrow" aria-hidden="true"></span></button><button class="secondary-button" id="next-level-button" type="button" hidden>下一关 →</button><button class="secondary-button" id="restart-button" type="button" hidden>重开本关</button><p id="overlay-note">无需登录 · 失败就再来一局</p></div>
           </div>
           <div class="drag-hint" id="drag-hint" hidden><span>←</span> 在下方左右拖动，不挡前路 <span>→</span></div>
           <span class="stage-corner" id="stage-corner" aria-hidden="true">LEVEL 01 / NEON AVENUE</span>
         </div>
-        <div class="frame-caption"><span><i></i> 打门成长 · 三种武器 · 三条路线</span><span>双游戏版 0.3</span></div>
+        <div class="frame-caption"><span><i></i> 密集敌潮 · 破阵支援 · 成片清场</span><span>火力体验版 0.4</span></div>
       <div class="play-settings" aria-label="体验设置"><label><input type="checkbox" id="motion-setting"> 减少动态</label><label><input type="checkbox" id="vibration-setting"> 轻触震动</label><span id="save-note">纪录只存这台设备</span></div></section>
     </main>
     <footer class="site-footer"><span>简单的快乐，直接开始。</span><span>不登录 · 无广告 · 无内购</span></footer>

@@ -178,3 +178,141 @@ test('all level, weapon, gate, heavy and boss paths draw without game mutations'
     }
   }
 });
+
+test('crowd silhouettes batch by depth and never draw fodder HP bars', () => {
+  const { renderer: r, calls } = renderer();
+  const enemies = Array.from({ length: 192 }, (_, id) => ({
+    active: true, id, x: (id % 16 - 7.5) * .105, z: 240 + Math.floor(id / 16) * 22,
+    hp: 1, maxHP: 3, phase: id * .3, hit: 0, heavy: false,
+  }));
+  calls.length = 0; r.enemiesBatch(enemies, 1);
+  assert.equal(r.drawStats.enemyBatches, 1);
+  assert.equal(calls.filter(([kind]) => kind === 'fill').length, 3);
+  assert.equal(calls.filter(([kind]) => kind === 'stroke').length, 1);
+  assert.equal(calls.filter(([kind]) => kind === 'rect').length, 192 * 2, 'two eye marks each, no HP rectangles');
+  assert.ok(calls.some(([kind, prop, value]) => kind === 'set' && prop === 'fillStyle' && value === '#152332'));
+  assert.ok(!calls.some(([kind, prop, value]) => kind === 'set' && prop === 'fillStyle' && value === '#e85e87'));
+  calls.length = 0; r.enemy({ ...enemies[0], heavy: true, hp: 10, maxHP: 20 }, 1);
+  assert.equal(calls.filter(([kind]) => kind === 'rect').length, 6, 'heavy eyes, shoulder marks and health bar');
+  assert.ok(calls.some(([kind, prop, value]) => kind === 'set' && prop === 'strokeStyle' && value === '#f3b66e'));
+});
+
+test('a group death leaves bounded dark fragments and one aggregated kill counter', () => {
+  const { renderer: r } = renderer();
+  for (let i = 0; i < 40; i++) r.event({ type: 'kill', x: -.5 + i / 40, z: 180 + i, enemyId: i, heavy: false, batch: 1 });
+  assert.equal(r.particles.count, 80);
+  assert.ok(r.particles.items.filter(p => p.active).every(p => p.kind === 'chunk' && p.color === '#152332'));
+  assert.equal(r.labels.filter(l => l.kind === 'kills').length, 0);
+  for (let i = 0; i < 6; i++) r.update(.05);
+  assert.equal(r.labels.filter(l => l.kind === 'kills').length, 1);
+  assert.equal(r.labels.find(l => l.kind === 'kills').text, '+40');
+  assert.ok(r.shake <= .045, 'kill burst camera impulse stays below one pixel');
+  for (let i = 0; i < 12; i++) r.event({ type: 'kill', x: .2, z: 100, enemyId: i, heavy: true, batch: 2 });
+  for (let i = 0; i < 6; i++) r.update(.05);
+  assert.equal(r.labels.filter(l => l.kind === 'kills').length, 1);
+  assert.equal(r.labels.find(l => l.kind === 'kills').text, '+12');
+  assert.equal(r.killBatch.count, 0);
+});
+
+test('large death/event storms share the same fixed FX pool and reset kill state', () => {
+  for (const reduced of [false, true]) {
+    const { renderer: r } = renderer(reduced);
+    for (let i = 0; i < 1000; i++) {
+      r.event({ type: 'kill', x: 0, z: 200, enemyId: i, heavy: i % 7 === 0 });
+      r.event({ type: 'fire', x: 0, weapon: 'pierce', tier: 2, batch: i });
+      r.event({ type: 'explosion', x: 0, z: 200, radius: .52, depth: 150, tier: 2 });
+      r.event({ type: 'power', x: 0, name: '横扫支援', weapon: 'cannon', tier: 2 });
+    }
+    assert.equal(r.particles.items.length, reduced ? 80 : 280);
+    assert.ok(r.particles.count <= (reduced ? 80 : 280));
+    assert.ok(r.labels.length <= 6);
+    r.reset(); assert.equal(r.killBatch.count, 0); assert.equal(r.particles.count, 0); assert.equal(r.labels.length, 0);
+  }
+});
+
+test('reduced motion leaves FX positions/radii static and disables every camera/flash response', () => {
+  const { renderer: r, calls } = renderer(true);
+  for (const event of [
+    { type: 'kill', x: 0, z: 200, enemyId: 2 },
+    { type: 'fire', x: 0, weapon: 'pierce', tier: 2 },
+    { type: 'power', x: 0, name: '横扫支援', weapon: 'cannon', tier: 2 },
+    { type: 'explosion', x: .2, z: 200, radius: .52, depth: 150, tier: 2 },
+    { type: 'hurt', x: 0, amount: -3 },
+    { type: 'gain', x: 0, amount: 4 },
+  ]) r.event(event);
+  const before = r.particles.items.filter(p => p.active).map(p => ({ x: p.x, y: p.y, radius: p.radius, radiusY: p.radiusY }));
+  r.update(.05);
+  assert.deepEqual(r.particles.items.filter(p => p.active).map(p => ({ x: p.x, y: p.y, radius: p.radius, radiusY: p.radiusY })), before);
+  assert.equal(r.shake, 0); assert.equal(r.flash, 0); assert.equal(r.muzzle, 0);
+  calls.length = 0; r.effects(); const shapes = calls.filter(([name]) => name === 'ellipse');
+  r.update(.05); calls.length = 0; r.effects();
+  assert.deepEqual(calls.filter(([name]) => name === 'ellipse'), shapes, 'no ring expansion');
+});
+
+test('real tier projectile width and velocity control the visible pattern', () => {
+  const { renderer: r, calls } = renderer();
+  const widths = [];
+  for (const [tier, radius] of [[0, .012], [1, .055], [2, .11]]) {
+    calls.length = 0; r.bullet({ x: .2, z: 200, weapon: 'pierce', tier, radius, vx: 0, speed: 1120 });
+    widths.push(calls.find(([kind, prop]) => kind === 'set' && prop === 'lineWidth')[2]);
+  }
+  assert.ok(widths[2] > widths[1] * 1.6 && widths[1] > widths[0] * 1.6);
+  const b = { x: .1, z: 200, weapon: 'scatter', tier: 2, radius: .035, vx: .76, speed: 1150 };
+  calls.length = 0; r.bullet(b);
+  const tail = r.project(b.x - b.vx * (22 * 1.56) / b.speed, b.z - 22 * 1.56);
+  const firstLine = calls.find(([kind]) => kind === 'lineTo');
+  assert.ok(Math.abs(firstLine[1] - tail.x) < 1e-9 && Math.abs(firstLine[2] - tail.y) < 1e-9);
+});
+
+test('volley and actual explosion footprints occupy real locations and damage extents', () => {
+  const { renderer: r } = renderer();
+  r.event({ type: 'fire', weapon: 'rifle', tier: 0, x: .2, batch: 1 });
+  r.event({ type: 'explosion', weapon: 'cannon', tier: 2, chain: true, x: -.25, z: 220, radius: .34, depth: 95 });
+  const footprint = r.particles.items.find(p => p.active && p.kind === 'footprint');
+  assert.equal(footprint.x, r.project(.2, 0).x); assert.equal(footprint.y, r.project(.2, 0).y);
+  const explosion = r.particles.items.find(p => p.active && p.kind === 'ring');
+  assert.equal(explosion.x, r.project(-.25, 220).x);
+  assert.equal(explosion.radius, .34 * r.width * .455 * r.project(-.25, 220).s);
+  assert.equal(explosion.radiusY, Math.abs(r.project(-.25, 125).y - r.project(-.25, 315).y) / 2);
+});
+
+test('dead enemies are omitted at their actual world positions without replacement haze', () => {
+  const { renderer: r } = renderer(), g = new Game(); g.start();
+  g.enemies.take({ id: 1, x: -.4, z: 200, hp: 1, maxHP: 1 });
+  g.enemies.take({ id: 2, x: 0, z: 200, hp: 1, maxHP: 1 });
+  g.enemies.take({ id: 3, x: .4, z: 200, hp: 1, maxHP: 1 });
+  const positions = []; r.enemiesBatch = objects => positions.push(...objects.map(o => o.x));
+  g.enemies.items.find(e => e.id === 2).active = false;
+  r.draw(g, 0); assert.deepEqual(positions, [-.4, .4]);
+  assert.equal(r.particles.count, 0);
+});
+
+test('nearby gates split depth batches at exact z even within one slice', () => {
+  const { renderer: r } = renderer(), g = new Game(), order = []; g.start();
+  g.gates = [{ z: 205, resolved: false }];
+  g.enemies.take({ x: 0, z: 210 }); g.enemies.take({ x: 0, z: 200 });
+  g.bullets.take({ x: 0, z: 208 }); g.bullets.take({ x: 0, z: 202 });
+  r.background = () => {}; r.squad = () => {}; r.effects = () => {};
+  r.gate = o => order.push(['gate', o.z]); r.enemy = o => order.push(['enemy', o.z]); r.bullet = o => order.push(['bullet', o.z]);
+  r.draw(g, 0);
+  const barrier = order.findIndex(([kind]) => kind === 'gate');
+  assert.ok(order.slice(0, barrier).every(([, z]) => z > 205));
+  assert.ok(order.slice(barrier + 1).every(([, z]) => z < 205));
+});
+
+test('192-enemy plus full projectile/FX/squad stress frame stays under 600 Canvas draw calls', t => {
+  for (const reduced of [false, true]) {
+    const { renderer: r, calls } = renderer(reduced), g = new Game(); g.start();
+    g.squad = CONFIG.maxSquad; g.weaponTier = 2; g.weapon = 'scatter';
+    for (let id = 0; id < 192; id++) g.enemies.take({ id, x: (id % 16 - 7.5) * .105, z: 160 + Math.floor(id / 16) * 22, hp: 1, maxHP: 2, heavy: id % 48 === 0, phase: id, hit: id % 5 ? 0 : .04 });
+    for (let i = 0; i < CONFIG.maxBullets; i++) g.bullets.take({ x: (i % 25 - 12) * .06, z: 30 + (i % 32) * 24, weapon: 'scatter', tier: 2, radius: .035, vx: (i % 7 - 3) * .38, speed: 1150 });
+    for (let i = 0; i < r.particles.capacity; i++) r.particles.take({ kind: 'chunk', x: i % 320, y: 150 + i % 200, size: 3, color: i % 2 ? '#152332' : '#3d3740', life: .1 + (i % 4) * .04, maxLife: .31 });
+    r.event({ type: 'fire', x: 0, weapon: 'scatter', tier: 2 });
+    calls.length = 0; r.draw(g, 10);
+    const count = calls.filter(([name]) => ['fill', 'stroke', 'fillRect', 'strokeRect', 'fillText', 'drawImage'].includes(name)).length;
+    t.diagnostic(`${reduced ? 'Reduced' : 'Normal'} motion: ${count} Canvas draws, ${r.drawStats.enemyBatches} enemy batches, ${r.drawStats.bulletBatches} projectile batches, ${CONFIG.maxBullets} projectiles`);
+    assert.equal(r.drawStats.enemies, 192); assert.equal(r.drawStats.bullets, CONFIG.maxBullets);
+    assert.ok(count < 600, `Measured ${count} Canvas draw calls`);
+    assert.ok(r.drawStats.enemyBatches < 45);
+  }
+});

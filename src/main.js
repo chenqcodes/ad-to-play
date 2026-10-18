@@ -1,5 +1,6 @@
 import { Game, FixedStepper, CONFIG, LEVELS, WEAPONS, clamp } from './game.js';
 import { Renderer } from './render.js';
+import { Sound } from './sound.js';
 import { readSaved, writeSaved, recordRun } from './storage.js';
 
 const $ = id => document.getElementById(id), canvas = $('game'), game = new Game(), keys = new Set();
@@ -12,39 +13,11 @@ const renderer = new Renderer(canvas, { reducedMotion });
 let pointer = null, audio = null, lastTime = 0, visualTime = 0, toastUntil = 0, usedDrag = false, shownMode = null;
 let lastSquad = -1, lastHudTime = -1, frameCount = 0, fps = 60, fpsTime = 0, resizePending = true, lastVibration = -10, recordedResult = null;
 
-class Sound {
-  constructor() { const Audio = window.AudioContext || window.webkitAudioContext; this.context = Audio ? new Audio() : null; this.lastFire = 0; }
-  unlock() { if (this.context?.state === 'suspended') this.context.resume().catch(() => {}); }
-  tone(freq, duration, type = 'sine', gain = .035, slide = 0) {
-    if (!this.context || this.context.state !== 'running') return;
-    const c = this.context, t = c.currentTime, o = c.createOscillator(), g = c.createGain();
-    o.type = type; o.frequency.setValueAtTime(freq, t);
-    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t + duration);
-    g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(.001, t + duration);
-    o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + duration); o.onended = () => { o.disconnect(); g.disconnect(); };
-  }
-  play(e) {
-    if (muted) return;
-    if (e.type === 'fire' && this.context?.currentTime - this.lastFire > .12) {
-      const cannon = e.weapon === 'cannon', pierce = e.weapon === 'pierce', scatter = e.weapon === 'scatter';
-      this.tone(cannon ? 130 : pierce ? 1100 : scatter ? 430 : 740, cannon ? .11 : .045, 'triangle', cannon ? .024 : .012, cannon ? -70 : -290);
-      this.lastFire = this.context.currentTime;
-    }
-    if (e.type === 'upgrade' || e.type === 'weapon') { this.tone(900, .16, 'triangle', .035, 450); this.tone(1200, .23, 'sine', .025, 400); }
-    if (e.type === 'gain') { this.tone(600, .12, 'sine', .04, 300); this.tone(900, .2, 'sine', .025, 300); }
-    if (e.type === 'gateGrow') this.tone(480 + Math.max(0, e.value) * 22, .04, 'sine', .012, 80);
-    if (e.type === 'hurt') this.tone(180, .2, 'triangle', .045, -110);
-    if (e.type === 'kill') this.tone(130, .07, 'triangle', .014, -60);
-    if (e.type === 'warning') this.tone(350, .3, 'sine', .025, 150);
-    if (e.type === 'win') { this.tone(540, .5, 'sine', .045, 540); this.tone(810, .6, 'sine', .03, 270); }
-    if (e.type === 'lose') this.tone(270, .5, 'triangle', .04, -180);
-  }
-}
 function persist() { if (!writeSaved(storage, saved)) $('save-note').textContent = '当前浏览器无法保存纪录'; }
 function unlockAudio() { if (!muted) { try { if (!audio) audio = new Sound(); audio.unlock(); } catch { /* Optional audio never blocks play. */ } } }
 function toast(message, duration = 1.4) { $('toast').textContent = message; toastUntil = visualTime + duration; $('toast').classList.add('visible'); }
 function releaseInput() { keys.clear(); if (pointer !== null) { try { canvas.releasePointerCapture(pointer.id); } catch {} pointer = null; } }
-function pause() { if (game.mode !== 'playing') return; game.pause(); releaseInput(); stepper.reset(); syncUI(); }
+function pause() { if (game.mode !== 'playing') return; game.pause(); audio?.silence(); releaseInput(); stepper.reset(); syncUI(); }
 function startOrResume() {
   unlockAudio(); releaseInput(); stepper.reset(); lastTime = 0;
   if (game.mode === 'paused') game.resume();
@@ -67,7 +40,7 @@ $('pause-button').addEventListener('click', () => game.mode === 'paused' ? start
 $('restart-button').addEventListener('click', () => { game.reset('ready'); startOrResume(); });
 $('next-level-button').addEventListener('click', () => { const index = LEVELS.findIndex(l => l.id === game.level.id); selectLevel(LEVELS[(index + 1) % LEVELS.length].id); startOrResume(); });
 for (let i = 0; i < LEVELS.length; i++) $('level-' + i).addEventListener('click', () => selectLevel(LEVELS[i].id));
-$('sound-button').addEventListener('click', () => { muted = !muted; saved.muted = muted; soundUI(); persist(); if (game.mode === 'playing') unlockAudio(); });
+$('sound-button').addEventListener('click', () => { muted = !muted; saved.muted = muted; if (muted) audio?.silence(); soundUI(); persist(); if (game.mode === 'playing') unlockAudio(); });
 $('motion-setting').checked = reducedMotion;
 $('motion-setting').addEventListener('change', () => {
   reducedMotion = $('motion-setting').checked; saved.reducedMotion = reducedMotion;
@@ -112,6 +85,12 @@ function syncUI() {
   if (game.squad !== lastSquad) { $('squad-count').textContent = String(game.squad).padStart(2, '0'); lastSquad = game.squad; }
   const seconds = Math.floor(game.time), level = game.level;
   if (seconds !== lastHudTime) { $('time-label').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; $('progress-fill').style.width = `${Math.min(100, game.time / level.bossAt * 100)}%`; lastHudTime = seconds; }
+  const tier = game.weaponTier || 0, next = game.nextSupport;
+  $('power-level').textContent = game.powerLabel || '单线压制';
+  $('power-level').dataset.tier = String(tier);
+  $('support-label').textContent = next ? `${Math.max(0, Math.ceil(next.at - game.time))} 秒后 · ${next.name}` : `全火力 · 已击退 ${game.stats.kills}`;
+  for (let i = 0; i < 3; i++) $('power-step-' + i).classList.toggle('active', i <= tier);
+  $('power-hud').hidden = Boolean(game.boss);
   $('phase-label').textContent = game.phase; $('fire-rate').textContent = `射速 ×${game.fireRate.toFixed(2)}`;
   const weapon = WEAPONS[game.weapon] || WEAPONS.rifle; $('weapon-label').textContent = weapon.name; $('weapon-label').style.color = weapon.color;
   $('boss-hud').hidden = !game.boss || game.mode === 'won';
@@ -146,7 +125,7 @@ function syncUI() {
     const progress = Math.round((result.progress || 0) * 100);
     $('result-stats').replaceChildren(...[[`${game.time.toFixed(1)}s`, '本局用时'], [String(game.maxSquad), '峰值人数'], [won ? '通关' : `${progress}%`, '本局进度']].map(([value, label]) => { const cell = document.createElement('div'), strong = document.createElement('strong'), small = document.createElement('small'); strong.textContent = value; small.textContent = label; cell.append(strong, small); return cell; }));
     const route = (result.route || []).slice(-5).join(' → ');
-    $('result-route').textContent = route ? `本局路线：${route}` : `本局武器：${weapon.name} · 击退 ${game.stats.kills} 名敌人`;
+    $('result-route').textContent = route ? `击退 ${game.stats.kills} 名敌人 · ${route}` : `本局武器：${weapon.name} · 击退 ${game.stats.kills} 名敌人`;
     $('result-best').textContent = bestLabel(level.id);
     $('level-summary').textContent = `${level.subtitle} · ${bestLabel(level.id)}`;
     $('start-label').textContent = won ? '再爽一局' : '立即再来';
@@ -164,14 +143,17 @@ function frame(now) {
   const dt = lastTime ? clamp((now - lastTime) / 1000, 0, .25) : 0; lastTime = now;
   if (!document.hidden) {
     visualTime += dt; if (game.mode === 'playing') stepper.advance(dt);
-    for (const event of game.drainEvents()) {
-      renderer.event(event); audio?.play(event);
-      if (saved.vibration && !reducedMotion && visualTime - lastVibration > .25 && ['gain', 'hurt', 'weapon', 'win'].includes(event.type)) {
+    const events = game.drainEvents();
+    audio?.playBatch(events, muted);
+    for (const event of events) {
+      renderer.event(event);
+      if (saved.vibration && !reducedMotion && visualTime - lastVibration > .25 && ['gain', 'hurt', 'weapon', 'power', 'win'].includes(event.type)) {
         try { window.navigator?.vibrate?.(event.type === 'hurt' ? 22 : 12); } catch {} lastVibration = visualTime;
       }
       if (event.type === 'gain') toast(event.capped ? `满编 ${CONFIG.maxSquad} 人 · 火力全开` : `+${event.amount} 位队友 · 火力增加`);
       if (event.type === 'upgrade') toast(`全队连射 · 射速 ×${event.rate.toFixed(2)}`, 1.8);
-      if (event.type === 'weapon') toast(`${event.name} · ${WEAPONS[event.weapon]?.description || '全队换装'}`, 2);
+      if (event.type === 'power') toast(`${event.name}到达 · ${event.tier >= 2 ? '扫开整片敌阵' : '弹道展开，开始破阵'}`, 1.7);
+      if (event.type === 'weapon') toast(`${event.name} · ${game.powerLabel || '全队换装'}`, 2);
       if (event.type === 'gateGrow' && event.value === 0) toast('打成零了！继续开火，让门变绿', 1);
       if (event.type === 'missGate') toast('从中间绕过了门', .9);
       if (event.type === 'bossPhase') toast('守卫半血 · 预警变快', 1.4);
@@ -187,4 +169,4 @@ function frame(now) {
 }
 soundUI(); $('game-frame').classList.toggle('motion-reduced', reducedMotion); syncUI(); requestAnimationFrame(frame);
 // Explicit opt-in acceptance aid. No telemetry and no default global state.
-if (new URLSearchParams(location.search).has('qa')) window.__NEON_QA__ = { game, renderer, stepper, getState: () => ({ mode: game.mode, level: game.level.id, weapon: game.weapon, time: game.time, squad: game.squad, rapid: game.rapid, fireRate: game.fireRate, x: game.x, targetX: game.targetX, bullets: game.bullets.count, enemies: game.enemies.count, particles: renderer.particles.count, fps, dpr: renderer.dpr, bossHP: game.boss?.hp, stats: { ...game.stats } }) };
+if (new URLSearchParams(location.search).has('qa')) window.__NEON_QA__ = { game, renderer, stepper, getState: () => ({ mode: game.mode, level: game.level.id, weapon: game.weapon, weaponTier: game.weaponTier, time: game.time, squad: game.squad, rapid: game.rapid, fireRate: game.fireRate, x: game.x, targetX: game.targetX, bullets: game.bullets.count, enemies: game.enemies.count, particles: renderer.particles.count, fps, dpr: renderer.dpr, bossHP: game.boss?.hp, stats: { ...game.stats } }) };

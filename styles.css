@@ -14,3 +14,7 @@
 /* Keep small HUD controls easy to tap without covering the road. */
 .hud-actions{gap:8px}.icon-button{width:36px;height:38px}.icon-button:before{content:'';position:absolute;inset:-3px}.progress-label>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:calc(100% - 36px)}
 @media(max-width:360px){.hud-actions{gap:7px}.icon-button{width:35px;height:38px}.hud{gap:9px}.progress-label{font-size:8px}}
+/* In-run support is visible from the first second, without another button. */
+.power-hud{position:absolute;top:85px;left:23px;right:23px;pointer-events:none}.power-hud>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:8px;color:#a5c3ce}.power-hud strong{font-weight:750;letter-spacing:.5px;color:#72ecff}.power-hud strong[data-tier="1"]{color:#cba7ff}.power-hud strong[data-tier="2"]{color:#ffd077}.power-steps{display:flex;gap:4px;margin-top:7px}.power-steps i{height:3px;flex:1;background:#43627760;border-radius:2px}.power-steps i.active{background:#72ecff}.power-steps i:nth-child(2).active{background:#cba7ff}.power-steps i:nth-child(3).active{background:#ffd077}.game-toast{top:131px}.start-copy .mini-label{letter-spacing:2px}
+@media(max-width:760px){.power-hud{top:80px;left:19px;right:19px}.power-hud>div:first-child{font-size:8px}}
+@media(max-width:360px){.power-hud{left:15px;right:15px}.power-hud>div:first-child{font-size:7px}}

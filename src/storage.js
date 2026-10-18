@@ -1,12 +1,15 @@
 // Device-local preferences and scores only. No requests or identifiers.
-const KEY = 'ad-to-play:neon:v3';
+const KEY = 'ad-to-play:neon:v4';
+const LEGACY_KEY = 'ad-to-play:neon:v3';
 export const DEFAULTS = Object.freeze({ muted: true, vibration: false, reducedMotion: null, records: {} });
 export function readSaved(storage) {
   try {
-    const value = JSON.parse(storage?.getItem(KEY) || 'null');
+    const current = storage?.getItem(KEY);
+    const value = JSON.parse(current || storage?.getItem(LEGACY_KEY) || 'null');
+    const legacy = !current;
     if (!value || typeof value !== 'object') return { ...DEFAULTS, records: {} };
     const records = {};
-    for (const [id, record] of Object.entries(value.records || {}).slice(0, 20)) {
+    for (const [id, record] of Object.entries(legacy ? {} : value.records || {}).slice(0, 20)) {
       if (!record || typeof record !== 'object') continue;
       records[id] = {
         wins: Math.max(0, Math.min(999999, Math.floor(Number(record.wins) || 0))),

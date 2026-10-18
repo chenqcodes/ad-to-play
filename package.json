@@ -1,6 +1,6 @@
 {
   "name": "ad-to-play",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Original instant-play arcade and puzzle games. Static, private-by-default and dependency-free.",
@@ -9,7 +9,7 @@
     "build": "node scripts/build.mjs",
     "preview": "node scripts/serve.mjs dist",
     "test": "node --test test/*.test.mjs games/pin-rescue/test/*.test.mjs",
-    "check": "node --check src/game.js && node --check src/render.js && node --check src/main.js && node --check src/storage.js && node --check games/pin-rescue/main.mjs && node --check games/pin-rescue/engine.mjs && npm test && npm run build"
+    "check": "node --check src/game.js && node --check src/render.js && node --check src/main.js && node --check src/storage.js && node --check src/sound.js && node --check games/pin-rescue/main.mjs && node --check games/pin-rescue/engine.mjs && npm test && npm run build"
   },
   "engines": {
     "node": ">=20"

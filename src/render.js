@@ -4,11 +4,15 @@ const FONT = 'system-ui, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", s
 const C = { lime: '#d9ff68', cyan: '#72ecff', red: '#ff6488' };
 const WEAPON_COLORS = { rifle: C.cyan, scatter: '#ffd077', pierce: '#cba7ff', cannon: '#ffad68' };
 const PALETTES = {
-  growth: ['#0d263b', '#17445a', '#102f43', '#214e60', '#1a4156'],
-  firepower: ['#222239', '#414357', '#26394b', '#4b4d5b', '#293e50'],
-  survival: ['#24233f', '#3b3e5e', '#222e4a', '#414c68', '#293c58'],
+  growth: ['#101e2e', '#2f4656', '#213b49', '#78949a', '#4b6b76'],
+  firepower: ['#252338', '#454b61', '#253c4c', '#989295', '#596d7b'],
+  survival: ['#24233f', '#3b455d', '#273a4b', '#89939e', '#536a7c'],
 };
 const signed = value => value > 0 ? `+${value}` : `${value}`;
+// Depth slices batch the horde; gates and bosses remain exact occlusion barriers.
+const DEPTH_SLICE = 32;
+const ENEMY_INK = '#152332';
+const ENEMY_RIM = '#485768';
 const weaponColor = weapon => WEAPONS[weapon]?.color || WEAPON_COLORS[weapon] || C.cyan;
 function roundRect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
 
@@ -27,6 +31,8 @@ export class Renderer {
     this.height = 700;
     this.dpr = 1;
     this.palettes = {};
+    this.killBatch = { count: 0, x: 0, z: 0, age: 0 };
+    this.drawStats = { enemyBatches: 0, bulletBatches: 0, enemies: 0, bullets: 0 }; 
   }
 
   setReducedMotion(enabled) {
@@ -62,6 +68,7 @@ export class Renderer {
   reset() {
     this.particles.clear(); this.labels.length = 0;
     this.shake = 0; this.flash = 0; this.beam = null; this.muzzle = 0;
+    this.killBatch = { count: 0, x: 0, z: 0, age: 0 };
   }
 
   burst(x, z, color, count = 12, power = 70) {
@@ -69,34 +76,66 @@ export class Renderer {
     const total = Math.min(this.particles.capacity, this.reducedMotion ? Math.ceil(count * .35) : count);
     for (let i = 0; i < total; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const speed = (.3 + Math.random() * .7) * power * (this.reducedMotion ? .45 : 1);
+      const speed = this.reducedMotion ? 0 : (.3 + Math.random() * .7) * power;
       this.particles.take({ kind: 'spark', x: p.x, y: p.y - 12 * p.s,
-        vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 25,
+        vx: Math.cos(angle) * speed, vy: this.reducedMotion ? 0 : Math.sin(angle) * speed - 25,
         life: .25 + Math.random() * .3, maxLife: .55,
         size: (2 + Math.random() * 3) * p.s, color });
     }
   }
 
-  ring(x, z, color, radius = .24) {
+  ring(x, z, color, radius = .24, depth = 0, kind = 'ring') {
     const p = this.project(x, z);
-    this.particles.take({ kind: 'ring', x: p.x, y: p.y - 10 * p.s,
-      radius: Math.max(9, radius * this.width * .455 * p.s),
-      life: this.reducedMotion ? .18 : .35, maxLife: this.reducedMotion ? .18 : .35,
-      size: 2 * p.s, color });
+    const ry = depth > 0 ? Math.abs(this.project(x, z - depth).y - this.project(x, z + depth).y) / 2 : 7 * p.s;
+    this.particles.take({ kind, x: p.x, y: p.y - (kind === 'footprint' ? 0 : 7 * p.s),
+      radius: Math.max(8, radius * this.width * .455 * p.s), radiusY: Math.max(4, ry),
+      life: this.reducedMotion ? .22 : kind === 'footprint' ? .14 : .3,
+      maxLife: this.reducedMotion ? .22 : kind === 'footprint' ? .14 : .3,
+      size: Math.max(1, 2 * p.s), color });
   }
 
-  label(text, color, x, z = 0, size = 28) {
+  death(e) {
+    // Two dark fragments per ordinary death, three per heavy. No separate corpse
+    // list: hits, chunks, upgrade sparks and real blast footprints share one pool.
+    const p = this.project(e.x, e.z), size = (e.heavy ? 36 : 23) * p.s * this.width / 420;
+    const count = this.reducedMotion ? 1 : e.heavy ? 3 : 2;
+    for (let i = 0; i < count; i++) {
+      const direction = i % 2 ? 1 : -1;
+      this.particles.take({ kind: 'chunk', x: p.x + direction * size * .12, y: p.y - size * (.6 + i * .18),
+        vx: this.reducedMotion ? 0 : direction * (11 + (e.enemyId || 0) % 7) * p.s,
+        vy: this.reducedMotion ? 0 : -12 * p.s, size: size * (e.heavy ? .32 : .3),
+        life: this.reducedMotion ? .16 : .25 + ((e.enemyId || 0) % 4) * .018,
+        maxLife: this.reducedMotion ? .16 : .31, color: e.heavy ? '#3d3740' : ENEMY_INK });
+    }
+    const k = this.killBatch;
+    k.count++; k.x += e.x; k.z += e.z;
+  }
+
+  flushKills() {
+    const k = this.killBatch;
+    if (!k.count) return;
+    // One counter at most, refreshed only on a 300 ms cadence. It does not cover
+    // the front with dozens of popups when a penetrating volley clears a row.
+    this.labels = this.labels.filter(label => label.kind !== 'kills');
+    this.label(`+${k.count}`, '#e5ff9b', k.x / k.count, k.z / k.count, 20, 'kills');
+    if (!this.reducedMotion && k.count >= 8) this.shake = Math.max(this.shake, .045);
+    this.killBatch = { count: 0, x: 0, z: 0, age: 0 };
+  }
+
+  label(text, color, x, z = 0, size = 28, kind = 'notice') {
     // Event bursts can be much larger than one frame. Both pools are strictly bounded.
     if (this.labels.length >= 6) this.labels.shift();
-    this.labels.push({ text, color, x, z, age: 0, size });
+    this.labels.push({ text, color, x, z, age: 0, size, kind });
   }
 
   event(e) {
     const color = weaponColor(e.weapon);
-    if (e.type === 'fire' && !this.reducedMotion) this.muzzle = .06;
-    if (e.type === 'hit' || e.type === 'hitBoss') {
-      this.burst(e.x, e.z, e.type === 'hitBoss' ? '#ffcba0' : color, 3, 35);
+    if (e.type === 'fire') {
+      if (!this.reducedMotion) this.muzzle = .06;
+      this.ring(e.x || 0, 0, color, .13 + (e.tier || 0) * .065, 0, 'footprint');
     }
+    // Fodder's own short hit tint is enough; no per-hit particle storm.
+    if (e.type === 'hitBoss') this.burst(e.x, e.z, '#ffcba0', 2, 30);
     if (e.type === 'gateHit') this.burst(e.x, e.z, e.value >= 0 ? C.lime : '#ffb0bf', 2, 25);
     if (e.type === 'gateGrow') {
       this.ring(e.x, e.z, e.value >= 0 ? C.lime : '#ffb0bf', .17);
@@ -104,17 +143,21 @@ export class Renderer {
       if (e.value > 0 && e.value - e.amount <= 0) this.label('转正！', C.lime, e.x, e.z, 20);
     }
     if (e.type === 'explosion') {
-      this.ring(e.x, e.z, weaponColor('cannon'), e.radius);
-      this.burst(e.x, e.z, weaponColor('cannon'), 13, 85);
+      this.ring(e.x, e.z, e.chain ? '#ffe2a2' : weaponColor('cannon'), e.radius, e.depth || 0);
+      if (!this.reducedMotion) this.burst(e.x, e.z, weaponColor('cannon'), e.chain ? 3 : 4, 45);
     }
     if (e.type === 'kill') {
-      this.burst(e.x, e.z, C.red, 14, 75);
-      this.ring(e.x, e.z, '#ffbdcf', .09);
+      this.death(e);
     }
     if (e.type === 'gain') {
       this.burst(e.x, 0, C.lime, 28, 95);
       this.label(e.amount ? `+${e.amount}` : '人数已满', C.lime, e.x);
       if (!this.reducedMotion) this.flash = .12;
+    }
+    if (e.type === 'power') {
+      this.burst(e.x, 0, e.tier >= 2 ? '#ffe29a' : color, 20, 65);
+      this.ring(e.x, 0, e.tier >= 2 ? '#ffe29a' : color, .32);
+      this.label(e.name || '火力升级', e.tier >= 2 ? '#ffe29a' : color, e.x, 0, 25);
     }
     if (e.type === 'weapon') {
       this.burst(e.x, 0, color, 28, 95);
@@ -151,9 +194,10 @@ export class Renderer {
       if (!p.active) continue;
       p.life -= safeDt;
       if (p.life <= 0) { p.active = false; continue; }
-      if (p.kind === 'spark') { p.x += p.vx * safeDt; p.y += p.vy * safeDt; p.vy += 150 * safeDt; }
+      if (!this.reducedMotion && (p.kind === 'spark' || p.kind === 'chunk')) { p.x += p.vx * safeDt; p.y += p.vy * safeDt; p.vy += (p.kind === 'chunk' ? 55 : 150) * safeDt; }
     }
     this.labels = this.labels.filter(l => (l.age += safeDt) < .9);
+    if (this.killBatch.count) { this.killBatch.age += safeDt; if (this.killBatch.age + 1e-9 >= .3) this.flushKills(); }
   }
 
   draw(game, visualTime = 0) {
@@ -167,21 +211,41 @@ export class Renderer {
     if (game.boss?.attack) this.warning(game.boss.attack, game.time, false);
     if (this.beam) this.drawBeam(this.beam);
     const objects = [], idle = game.mode === 'ready';
-    // The ready overlay owns the center: keep its instructions clear of demo gates.
+    this.drawStats = { enemyBatches: 0, bulletBatches: 0, enemies: 0, bullets: 0 };
+    // The ready overlay owns the center. Every other actor uses its actual
+    // gameplay position; removed bodies leave real gaps instead of painted fog.
     if (!idle) {
-      for (const gate of game.gates) if (!gate.resolved) objects.push({ ...gate, kind: 'gate' });
-      for (const enemy of game.enemies.items) if (enemy.active) objects.push({ ...enemy, kind: 'enemy' });
-      if (game.boss && game.mode !== 'won') objects.push({ ...game.boss, kind: 'boss' });
+      for (const gate of game.gates) if (!gate.resolved) objects.push({ entity: gate, z: gate.z, kind: 'gate' });
+      for (const enemy of game.enemies.items) if (enemy.active) objects.push({ entity: enemy, z: enemy.z, kind: 'enemy' });
+      if (game.boss && game.mode !== 'won') objects.push({ entity: game.boss, z: game.boss.z, kind: 'boss' });
     }
-    for (const bullet of game.bullets.items) if (bullet.active) objects.push({ ...bullet, kind: 'bullet' });
-    // Bullets share depth sorting with targets, so a rear shot cannot paint over a nearer gate.
+    for (const bullet of game.bullets.items) if (bullet.active) objects.push({ entity: bullet, z: bullet.z, kind: 'bullet' });
     objects.sort((a, b) => b.z - a.z);
-    for (const o of objects) {
-      if (o.kind === 'gate') this.gate(o, game);
-      else if (o.kind === 'boss') this.boss(o, visualTime);
-      else if (o.kind === 'bullet') this.bullet(o);
-      else this.enemy(o, visualTime);
+    let group = [], slice = null;
+    const flush = () => {
+      if (!group.length) return;
+      const enemies = [], bullets = [];
+      for (const item of group) (item.kind === 'enemy' ? enemies : bullets).push(item.entity);
+      // Approximate ordering only inside one 32-unit depth slice. Gate/boss
+      // barriers flush both batches at their exact depth, so shots never show
+      // through a nearer gate. Depth extent is much shorter than a bullet trail.
+      if (bullets.length === 1) this.bullet(bullets[0]);
+      else if (bullets.length) this.bulletsBatch(bullets);
+      if (enemies.length === 1) this.enemy(enemies[0], visualTime);
+      else if (enemies.length) this.enemiesBatch(enemies, visualTime);
+      group = [];
+    };
+    for (const item of objects) {
+      if (item.kind === 'gate' || item.kind === 'boss') {
+        flush(); slice = null;
+        if (item.kind === 'gate') this.gate(item.entity, game); else this.boss(item.entity, visualTime);
+      } else {
+        const next = Math.floor(item.z / DEPTH_SLICE);
+        if (next !== slice) { flush(); slice = next; }
+        group.push(item);
+      }
     }
+    flush();
     this.squad(game, idle ? 0 : visualTime);
     this.effects();
     for (const l of this.labels) {
@@ -202,14 +266,30 @@ export class Renderer {
   effects() {
     const { ctx } = this;
     ctx.save();
+    // Shared, finite pool; alpha bins keep a whole death group in a few fills.
+    const groups = new Map();
     for (const p of this.particles.items) {
       if (!p.active) continue;
-      ctx.globalAlpha = clamp(p.life / p.maxLife * 1.5, 0, 1);
-      if (p.kind === 'ring') {
-        const progress = this.reducedMotion ? .8 : 1 - p.life / p.maxLife;
-        ctx.strokeStyle = p.color; ctx.lineWidth = Math.max(1, p.size);
-        ctx.beginPath(); ctx.ellipse(p.x, p.y, p.radius * (.4 + progress), p.radius * (.25 + progress * .45), 0, 0, Math.PI * 2); ctx.stroke();
-      } else { ctx.fillStyle = p.color; ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size); }
+      const alpha = Math.ceil(clamp(p.life / p.maxLife, 0, 1) * 4) / 4;
+      const key = `${p.kind}:${p.color}:${alpha}`;
+      if (!groups.has(key)) groups.set(key, { kind: p.kind, color: p.color, alpha, items: [] });
+      groups.get(key).items.push(p);
+    }
+    for (const group of groups.values()) {
+      ctx.globalAlpha = group.alpha * (this.reducedMotion ? .6 : 1);
+      ctx.fillStyle = group.color; ctx.strokeStyle = group.color; ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      for (const p of group.items) {
+        if (p.kind === 'ring' || p.kind === 'footprint') {
+          const expansion = this.reducedMotion || p.kind === 'footprint' ? 1 : .82 + (1 - p.life / p.maxLife) * .18;
+          const rx = p.radius * expansion, ry = p.radiusY * expansion;
+          ctx.moveTo(p.x + rx, p.y); ctx.ellipse(p.x, p.y, rx, ry, 0, 0, Math.PI * 2);
+        } else if (p.kind === 'chunk') {
+          ctx.moveTo(p.x - p.size, p.y - p.size * .55); ctx.lineTo(p.x + p.size * .5, p.y - p.size);
+          ctx.lineTo(p.x + p.size, p.y + p.size * .5); ctx.lineTo(p.x - p.size * .5, p.y + p.size); ctx.closePath();
+        } else ctx.rect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+      }
+      if (group.kind === 'ring' || group.kind === 'footprint') ctx.stroke(); else ctx.fill();
     }
     ctx.restore();
   }
@@ -317,38 +397,101 @@ export class Renderer {
     ctx.restore();
   }
 
-  bullet(b) {
-    const { ctx } = this, key = b.weapon || 'rifle', p = this.project(b.x, b.z);
-    const length = key === 'pierce' ? 72 : key === 'scatter' ? 22 : 34;
-    const tailX = b.x - (b.vx || 0) * (key === 'scatter' ? .035 : .025);
-    const tail = this.project(tailX, b.z - length), color = weaponColor(key);
-    ctx.save(); ctx.lineCap = 'round'; ctx.strokeStyle = color;
-    if (key === 'cannon') {
-      ctx.globalAlpha = .3; ctx.lineWidth = 8 * p.s; ctx.beginPath(); ctx.moveTo(tail.x, tail.y); ctx.lineTo(p.x, p.y); ctx.stroke();
-      ctx.globalAlpha = 1; ctx.fillStyle = color; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2.3, 5.2 * p.s), 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#fff4c3'; ctx.beginPath(); ctx.arc(p.x - p.s, p.y - p.s, Math.max(1, 2.1 * p.s), 0, Math.PI * 2); ctx.fill();
-    } else {
-      ctx.globalAlpha = key === 'pierce' ? .3 : .25; ctx.lineWidth = (key === 'pierce' ? 7 : 5) * p.s;
-      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tail.x, tail.y); ctx.stroke();
-      ctx.globalAlpha = 1; ctx.strokeStyle = key === 'scatter' ? '#ffe6b2' : key === 'pierce' ? '#eee0ff' : '#d4ffff';
-      ctx.lineWidth = Math.max(.8, (key === 'scatter' ? 2.4 : 1.8) * p.s);
-      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(tail.x, tail.y); ctx.stroke();
+  bullet(b) { this.bulletsBatch([b]); }
+
+  bulletsBatch(bullets) {
+    const { ctx } = this, groups = new Map();
+    for (const b of bullets) {
+      const key = b.weapon || 'rifle', tier = b.tier || 0, groupKey = `${key}:${tier}`;
+      if (!groups.has(groupKey)) groups.set(groupKey, { key, tier, points: [] });
+      const p = this.project(b.x, b.z);
+      const length = (key === 'pierce' ? 72 : key === 'scatter' ? 22 : 34) * (1 + tier * .28);
+      // Tail follows the simulated velocity, including the real fan/sweep lanes.
+      const tailX = b.x - (b.vx || 0) * length / (b.speed || WEAPONS[key]?.speed || 780);
+      const tail = this.project(tailX, b.z - length);
+      groups.get(groupKey).points.push({ p, tail, radius: b.radius || .012 });
     }
+    ctx.save(); ctx.lineCap = 'round';
+    for (const { key, tier, points } of groups.values()) {
+      const scale = points.reduce((sum, value) => sum + value.p.s, 0) / points.length;
+      const color = weaponColor(key), unit = this.width / 420;
+      const radius = points.reduce((sum, value) => sum + value.radius, 0) / points.length;
+      const physicalWidth = radius * this.width * .91 * scale;
+      ctx.strokeStyle = color; ctx.globalAlpha = tier >= 2 ? .35 : .3;
+      ctx.lineWidth = Math.max(physicalWidth, (key === 'pierce' ? 7 + tier * 3 : key === 'cannon' ? 9 + tier * 3 : 5 + tier * 2) * scale * unit);
+      ctx.beginPath();
+      for (const { p, tail } of points) { ctx.moveTo(p.x, p.y); ctx.lineTo(tail.x, tail.y); }
+      ctx.stroke();
+      if (key === 'cannon') {
+        ctx.globalAlpha = 1; ctx.fillStyle = color; ctx.beginPath();
+        for (const { p } of points) { const radius = Math.max(2, (5.2 + tier * 1.3) * p.s * unit); ctx.moveTo(p.x + radius, p.y); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); }
+        ctx.fill(); ctx.fillStyle = tier >= 2 ? '#fff2bf' : '#fff4dc'; ctx.beginPath();
+        for (const { p } of points) { const radius = Math.max(.8, (2 + tier * .6) * p.s * unit); ctx.moveTo(p.x + radius, p.y); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); }
+        ctx.fill();
+      } else {
+        ctx.globalAlpha = 1; ctx.strokeStyle = tier >= 2 ? '#fff0bc' : key === 'scatter' ? '#ffe6b2' : key === 'pierce' ? '#eee0ff' : '#d4ffff';
+        ctx.lineWidth = Math.max(.9, physicalWidth * .32, ((key === 'scatter' ? 2.4 : 1.8) + tier * .65) * scale * unit);
+        ctx.beginPath();
+        for (const { p, tail } of points) { ctx.moveTo(p.x, p.y); ctx.lineTo(tail.x, tail.y); }
+        ctx.stroke();
+      }
+      this.drawStats.bulletBatches++;
+    }
+    this.drawStats.bullets += bullets.length;
     ctx.restore();
   }
 
-  enemy(e, time) {
-    const { ctx } = this, p = this.project(e.x, e.z), size = (e.heavy ? 44 : 30) * p.s;
-    const bob = this.reducedMotion ? 0 : Math.sin(time * 8 + e.phase) * 2 * p.s;
-    const hit = !this.reducedMotion && e.hit > 0;
-    ctx.save(); ctx.translate(p.x, p.y + bob); ctx.fillStyle = '#071d2f66'; ctx.beginPath(); ctx.ellipse(0, 1, size * .65, size * .23, 0, 0, Math.PI * 2); ctx.fill();
-    if (!this.reducedMotion) ctx.rotate(Math.sin(time * 5 + e.phase) * .05);
-    ctx.fillStyle = hit ? '#fff6da' : e.heavy ? '#e5a34e' : '#e85e87'; roundRect(ctx, -size * .44, -size * 1.1, size * .88, size * .9, size * .15); ctx.fill();
-    ctx.fillStyle = hit ? '#fff' : e.heavy ? '#ffd68e' : '#ff95ac'; ctx.beginPath(); ctx.moveTo(-size * .44, -size * 1.1); ctx.lineTo(-size * .25, -size * 1.3); ctx.lineTo(size * .58, -size * 1.3); ctx.lineTo(size * .44, -size * 1.1); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#a63362'; ctx.beginPath(); ctx.moveTo(size * .44, -size * 1.1); ctx.lineTo(size * .58, -size * 1.3); ctx.lineTo(size * .58, -size * .35); ctx.lineTo(size * .44, -size * .2); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#572c55'; ctx.fillRect(-size * .31, -size * .87, size * .61, size * .19); ctx.fillStyle = '#ffe5ad'; ctx.fillRect(-size * .25, -size * .84, size * .15, size * .09); ctx.fillRect(size * .1, -size * .84, size * .15, size * .09);
-    ctx.fillStyle = '#b24269'; ctx.fillRect(-size * .34, -size * .2, size * .2, size * .24); ctx.fillRect(size * .14, -size * .2, size * .2, size * .24);
-    if (e.heavy || e.hp < e.maxHP) { ctx.fillStyle = '#572d48'; ctx.fillRect(-size * .5, -size * 1.55, size, 3 * p.s); ctx.fillStyle = e.heavy ? '#ffd68e' : '#ff96af'; ctx.fillRect(-size * .5, -size * 1.55, size * clamp(e.hp / e.maxHP, 0, 1), 3 * p.s); }
+  enemy(e, time) { this.enemiesBatch([e], time); }
+
+  enemiesBatch(enemies, time = 0) {
+    const { ctx } = this, groups = new Map(), unit = this.width / 420;
+    for (const e of enemies) {
+      const heavy = Boolean(e.heavy), hit = !this.reducedMotion && e.hit > 0;
+      const key = `${heavy}:${hit}`;
+      if (!groups.has(key)) groups.set(key, { heavy, hit, points: [] });
+      const p = this.project(e.x, e.z), size = (heavy ? 43 : 24) * p.s * unit;
+      const bob = this.reducedMotion ? 0 : Math.sin(time * 9 + (e.phase || 0)) * .65 * p.s * unit;
+      groups.get(key).points.push({ e, x: p.x, y: p.y + bob, size, scale: p.s });
+    }
+    ctx.save();
+    for (const { heavy, hit, points } of groups.values()) {
+      ctx.fillStyle = '#132a3e44'; ctx.beginPath();
+      for (const { x, y, size } of points) { ctx.moveTo(x + size * .52, y + size * .05); ctx.ellipse(x, y + size * .05, size * .52, size * .18, 0, 0, Math.PI * 2); }
+      ctx.fill();
+      ctx.fillStyle = hit ? '#e9e2c8' : heavy ? '#252936' : ENEMY_INK;
+      ctx.strokeStyle = heavy ? '#f3b66e' : ENEMY_RIM; ctx.lineWidth = heavy ? Math.max(1.1, unit * 1.6) : .65 * unit;
+      ctx.beginPath();
+      for (const { x, y, size: s } of points) {
+        // A rounded head, angular shoulders and separated feet read as a compact
+        // rushing crowd rather than pink boxes. One compound path per depth row.
+        ctx.moveTo(x + s * .23, y - s * 1.08); ctx.arc(x, y - s * 1.08, s * .23, 0, Math.PI * 2);
+        ctx.moveTo(x - s * .26, y - s * .87); ctx.lineTo(x - s * .45, y - s * .64);
+        ctx.lineTo(x - s * .42, y - s * .32); ctx.lineTo(x - s * .27, y - s * .4);
+        ctx.lineTo(x - s * .29, y); ctx.lineTo(x - s * .07, y); ctx.lineTo(x, y - s * .23);
+        ctx.lineTo(x + s * .07, y); ctx.lineTo(x + s * .29, y); ctx.lineTo(x + s * .27, y - s * .4);
+        ctx.lineTo(x + s * .42, y - s * .32); ctx.lineTo(x + s * .45, y - s * .64);
+        ctx.lineTo(x + s * .26, y - s * .87); ctx.closePath();
+      }
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = heavy ? '#f3b66e' : '#c38270'; ctx.beginPath();
+      for (const { x, y, size: s } of points) {
+        ctx.rect(x - s * .14, y - s * 1.12, s * .1, s * .055);
+        ctx.rect(x + s * .04, y - s * 1.12, s * .1, s * .055);
+        if (heavy) { ctx.rect(x - s * .32, y - s * .73, s * .15, s * .1); ctx.rect(x + s * .17, y - s * .73, s * .15, s * .1); }
+      }
+      ctx.fill();
+      // Fodder never has a health bar. The rare heavy retains an honest compact
+      // health indicator and gold shoulders so it stays legible inside a pack.
+      if (heavy) {
+        ctx.fillStyle = '#28303e'; ctx.beginPath();
+        for (const { x, y, size: s } of points) ctx.rect(x - s * .43, y - s * 1.53, s * .86, Math.max(1.4, s * .065));
+        ctx.fill(); ctx.fillStyle = '#f3b66e'; ctx.beginPath();
+        for (const { e, x, y, size: s } of points) ctx.rect(x - s * .43, y - s * 1.53, s * .86 * clamp(e.hp / e.maxHP, 0, 1), Math.max(1.4, s * .065));
+        ctx.fill();
+      }
+      this.drawStats.enemyBatches++;
+    }
+    this.drawStats.enemies += enemies.length;
     ctx.restore();
   }
 
@@ -366,28 +509,31 @@ export class Renderer {
   }
 
   squad(game, time) {
-    const { ctx } = this, weapon = game.weapon || 'rifle', color = weaponColor(weapon);
-    ctx.save(); if (game.time < game.hurtUntil) ctx.globalAlpha = .65;
+    const { ctx } = this, weapon = game.weapon || 'rifle', color = weaponColor(weapon), tier = game.weaponTier || 0;
+    const soldiers = [], size = 13 * this.width / 420;
     for (let i = 0; i < game.squad; i++) {
       const o = squadOffset(i, game.squad), projected = this.project(game.x + o.x, o.z);
-      const p = { x: this.project(game.x + o.x, 0).x, y: projected.y };
-      const size = 13 * (this.width / 420), bob = this.reducedMotion ? 0 : Math.sin(time * 13 + i * .9) * 1.2;
-      ctx.save(); ctx.translate(p.x, p.y + bob); ctx.fillStyle = '#06223580'; ctx.beginPath(); ctx.ellipse(0, 2, size * .6, size * .27, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#a4c95b'; ctx.fillRect(-size * .37, -size * .45, size * .28, size * .52); ctx.fillRect(size * .09, -size * .45, size * .28, size * .52);
-      ctx.fillStyle = C.lime; roundRect(ctx, -size * .44, -size * 1.3, size * .88, size * .92, size * .16); ctx.fill();
-      ctx.fillStyle = '#91d3dc'; ctx.fillRect(-size * .62, -size * 1.2, size * .2, size * .62); ctx.fillRect(size * .42, -size * 1.2, size * .2, size * .62);
-      ctx.fillStyle = '#e8ff9a'; roundRect(ctx, -size * .48, -size * 1.85, size * .96, size * .65, size * .23); ctx.fill();
-      ctx.fillStyle = '#244a54'; roundRect(ctx, -size * .35, -size * 1.66, size * .7, size * .22, size * .06); ctx.fill();
-      ctx.fillStyle = color; ctx.fillRect(-size * .26, -size * 1.61, size * .18, size * .07);
-      const barrelWidth = weapon === 'cannon' ? .3 : weapon === 'scatter' ? .24 : .17;
-      const barrelLength = weapon === 'pierce' ? 1.12 : .8;
-      ctx.fillRect(size * .43, -size * (.78 + barrelLength), size * barrelWidth, size * barrelLength);
-      if (weapon === 'scatter') { ctx.fillStyle = '#fff0c8'; ctx.fillRect(size * .4, -size * 1.65, size * .3, size * .12); }
-      if (!this.reducedMotion && this.muzzle > 0 && game.mode === 'playing') {
-        ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(size * .56, -size * 1.65); ctx.lineTo(size * .28, -size * 2.15); ctx.lineTo(size * .56, -size * 2); ctx.lineTo(size * .8, -size * 2.15); ctx.closePath(); ctx.fill();
-      }
-      ctx.restore();
+      soldiers.push({ x: this.project(game.x + o.x, 0).x, y: projected.y + (this.reducedMotion ? 0 : Math.sin(time * 13 + i * .9) * 1.2) });
     }
+    ctx.save(); if (game.time < game.hurtUntil) ctx.globalAlpha = .65;
+    const layer = (fill, shape) => {
+      ctx.fillStyle = fill; ctx.beginPath();
+      for (const { x, y } of soldiers) shape(x, y);
+      ctx.fill();
+    };
+    layer('#17344377', (x, y) => { ctx.moveTo(x + size * .6, y + 2); ctx.ellipse(x, y + 2, size * .6, size * .27, 0, 0, Math.PI * 2); });
+    layer('#a4c95b', (x, y) => { ctx.rect(x - size * .37, y - size * .45, size * .28, size * .52); ctx.rect(x + size * .09, y - size * .45, size * .28, size * .52); });
+    layer(C.lime, (x, y) => ctx.roundRect(x - size * .44, y - size * 1.3, size * .88, size * .92, size * .16));
+    layer('#91d3dc', (x, y) => { ctx.rect(x - size * .62, y - size * 1.2, size * .2, size * .62); ctx.rect(x + size * .42, y - size * 1.2, size * .2, size * .62); });
+    layer('#e8ff9a', (x, y) => ctx.roundRect(x - size * .48, y - size * 1.85, size * .96, size * .65, size * .23));
+    layer('#244a54', (x, y) => ctx.roundRect(x - size * .35, y - size * 1.66, size * .7, size * .22, size * .06));
+    const barrelWidth = weapon === 'cannon' ? .3 : weapon === 'scatter' ? .24 : .17;
+    const barrelLength = weapon === 'pierce' ? 1.12 : .8;
+    layer(color, (x, y) => { ctx.rect(x - size * .26, y - size * 1.61, size * .18, size * .07); ctx.rect(x + size * .43, y - size * (.78 + barrelLength), size * barrelWidth, size * barrelLength); });
+    if (weapon === 'scatter' || tier > 0) layer(tier >= 2 ? '#ffe4a3' : '#fff0c8', (x, y) => ctx.rect(x + size * .4, y - size * 1.65, size * .3, size * .12));
+    if (!this.reducedMotion && this.muzzle > 0 && game.mode === 'playing') layer(color, (x, y) => {
+      ctx.moveTo(x + size * .56, y - size * 1.65); ctx.lineTo(x + size * .28, y - size * 2.15); ctx.lineTo(x + size * .56, y - size * 2); ctx.lineTo(x + size * .8, y - size * 2.15); ctx.closePath();
+    });
     const p = this.project(game.x, 0); ctx.strokeStyle = '#d9ff6877'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(p.x - 13, p.y + 13); ctx.lineTo(p.x, p.y + 19); ctx.lineTo(p.x + 13, p.y + 13); ctx.stroke(); ctx.restore();
   }
