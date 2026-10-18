@@ -4,7 +4,7 @@ const root = resolve(import.meta.dirname, '..');
 const out = resolve(root, 'dist');
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
-for (const file of ['index.html', 'styles.css', 'src', 'public']) {
+for (const file of ['index.html', 'styles.css', 'src', 'public', 'games']) {
   await cp(resolve(root, file), file === 'public' ? out : resolve(out, file), { recursive: true });
 }
 for (const file of ['index.html', 'styles.css', 'src/main.js', 'src/game.js', 'src/render.js']) {

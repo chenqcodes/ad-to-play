@@ -1,1 +1,17 @@
-{"name":"ad-to-play","version":"0.2.0","private":true,"type":"module","description":"An original one-minute single-finger arcade shooter. Static and dependency-free.","scripts":{"dev":"node scripts/serve.mjs","build":"node scripts/build.mjs","preview":"node scripts/serve.mjs dist","test":"node --test test/*.test.mjs","check":"node --check src/game.js && node --check src/render.js && node --check src/main.js && npm test && npm run build"},"engines":{"node":">=20"}}
+{
+  "name": "ad-to-play",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "An original one-minute single-finger arcade shooter. Static and dependency-free.",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/serve.mjs dist",
+    "test": "node --test test/*.test.mjs games/pin-rescue/test/*.test.mjs",
+    "check": "node --check src/game.js && node --check src/render.js && node --check src/main.js && npm test && npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
