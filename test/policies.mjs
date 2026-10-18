@@ -57,7 +57,8 @@ export function simulate(style = 'good', fps = 60, levelId = LEVELS[0].id) {
   if (!Number.isFinite(fps) || fps <= 0) throw new RangeError('A positive render rate is required');
   const game = new Game(levelId); game.start();
   let ticks = 0, maxBullets = 0, maxEnemies = 0, minSquad = game.squad, bossStart = null, bossPhases = 0, missingShots = 0;
-  const stageKills = [0, 0, 0], supportMoments = [], killTimes = []; let peakKillsPerSecond = 0, maxChecks = 0, maxSplashChecks = 0;
+  const stageKills = [0, 0, 0], supportMoments = [], killTimes = []; let peakKillsPerSecond = 0, maxChecks = 0, maxSplashChecks = 0, maxPendingChains = 0, maxReservedChains = 0, maxChainSalvos = 0;
+  const chainEvents = []; const showcase = { at: null, count: 0, killsBefore44: 0 };
   const first = { hit: null, kill: null, reward: null, boss: null, gateGrowth: null }, timeline = [];
   const interesting = new Set(['gain', 'hurt', 'upgrade', 'weapon', 'missGate', 'boss', 'bossPhase', 'beam', 'dodge', 'win', 'lose', 'power', 'horde']);
   const stepper = new FixedStepper(dt => {
@@ -65,6 +66,11 @@ export function simulate(style = 'good', fps = 60, levelId = LEVELS[0].id) {
     const aliveBefore = game.enemies.count, killsBefore = game.stats.kills;
     pilot(game, style); game.update(dt); ticks++;
     const newlyKilled = game.stats.kills - killsBefore;
+    if (game.time >= 41 && game.time < 44) showcase.killsBefore44 += newlyKilled;
+    const chainRounds = game.bullets.items.filter(b => b.active && b.chain);
+    maxPendingChains = Math.max(maxPendingChains, game.pendingChains.length);
+    maxReservedChains = Math.max(maxReservedChains, chainRounds.length + game.pendingChains.length);
+    maxChainSalvos = Math.max(maxChainSalvos, new Set([...chainRounds, ...game.pendingChains].map(entry => entry.batch)).size);
     stageKills[game.time < 7 ? 0 : game.time < 23 ? 1 : 2] += newlyKilled;
     for (let i = 0; i < newlyKilled; i++) killTimes.push(game.time);
     while (killTimes.length && killTimes[0] < game.time - 1 + 1e-9) killTimes.shift();
@@ -75,12 +81,14 @@ export function simulate(style = 'good', fps = 60, levelId = LEVELS[0].id) {
     maxBullets = Math.max(maxBullets, game.bullets.count); maxEnemies = Math.max(maxEnemies, game.enemies.count); minSquad = Math.min(minSquad, game.squad);
     for (const event of game.drainEvents()) {
       if (event.type === 'power') supportMoments.push({ tier: event.tier, time: game.time, aliveBefore, killsBefore, killsNextSecond: null });
+      if (event.type === 'explosion' && event.chain) chainEvents.push({ time: event.time, batch: event.batch, x: event.x, z: event.z });
+      if (event.type === 'horde' && event.wave === 41) { showcase.at = game.time; showcase.count = event.count; }
       if (event.type === 'fire') missingShots += event.expectedCount - event.count;
       if (event.type === 'hit' && first.hit === null) first.hit = game.time;
       if (event.type === 'kill' && first.kill === null) first.kill = game.time;
       if (event.type === 'gateGrow' && first.gateGrowth === null) first.gateGrowth = game.time;
       if (['gain', 'upgrade', 'weapon'].includes(event.type) && first.reward === null) first.reward = game.time;
-      if (event.type === 'boss') { first.boss = game.time; bossStart = { time: game.time, squad: game.squad, rapid: game.rapid, weapon: game.weapon, enemies: game.enemies.count }; }
+      if (event.type === 'boss') { first.boss = game.time; bossStart = { time: game.time, squad: game.squad, rapid: game.rapid, weapon: game.weapon, enemies: game.enemies.count, enemyWaves: [...new Set(game.enemies.items.filter(enemy => enemy.active).map(enemy => enemy.wave))] }; }
       if (event.type === 'bossPhase') bossPhases++;
       if (interesting.has(event.type)) timeline.push({ time: game.time, type: event.type, squad: game.squad, rapid: game.rapid, weapon: game.weapon,
         ...('tier' in event ? { tier: event.tier } : {}), ...('count' in event && event.type === 'horde' ? { count: event.count } : {}), ...('source' in event ? { source: event.source } : {}), ...('amount' in event ? { amount: event.amount } : {}) });
@@ -91,5 +99,5 @@ export function simulate(style = 'good', fps = 60, levelId = LEVELS[0].id) {
   while (game.mode === 'playing' && frames++ < frameLimit) stepper.advance(1 / fps);
   if (game.mode === 'playing') throw new Error(`Pilot ${style} failed to reach a terminal state`);
   return { game, summary: { result: { ...game.result }, maxSquad: game.maxSquad, minSquad, maxBullets, maxEnemies, missingShots, ticks, first, bossStart,
-    bossHP: game.boss?.hp ?? null, bossPhases, stageKills, supportMoments, peakKillsPerSecond, maxChecks, maxSplashChecks, timeline } };
+    bossHP: game.boss?.hp ?? null, bossPhases, stageKills, supportMoments, peakKillsPerSecond, maxChecks, maxSplashChecks, maxPendingChains, maxReservedChains, maxChainSalvos, chainEvents, showcase, timeline } };
 }

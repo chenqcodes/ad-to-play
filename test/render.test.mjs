@@ -316,3 +316,182 @@ test('full enemy/projectile/FX/squad stress frame stays under 600 Canvas draw ca
     assert.ok(r.drawStats.enemyBatches < 45);
   }
 });
+
+test('a one-hit kill still renders its original silhouette when live enemy and FX slots are unavailable', () => {
+  const { renderer: r, calls } = renderer(), g = new Game(); g.start();
+  const enemy = g.enemies.take({ id: 991, x: .2, z: 220, hp: 1, maxHP: 1, hit: 0, heavy: false });
+  for (let i = 0; i < r.particles.capacity; i++) r.particles.take({ kind: 'chunk', x: 0, y: 0, size: 1, color: '#152332', life: .3, maxLife: .3, vx: 0, vy: 0 });
+  g.damageEnemy(enemy, 1, { weapon: 'rifle', vx: 0, speed: 780 });
+  for (const event of g.drainEvents()) r.event(event);
+  assert.equal(enemy.active, false); assert.equal(enemy.hp, 0); assert.equal(g.stats.kills, 1);
+  assert.equal(r.particles.count, r.particles.capacity); assert.equal(r.deathProxies.count, 1);
+  const proxy = r.deathProxies.items.find(p => p.active);
+  assert.equal(proxy.x, .2); assert.equal(proxy.z, 220); assert.equal(proxy.enemyId, 991);
+  assert.ok(!Object.values(proxy).includes(enemy)); assert.ok(!('hp' in proxy) && !('radius' in proxy));
+  r.update(1 / 60); calls.length = 0; const before = JSON.stringify(g); r.draw(g, 1);
+  assert.equal(JSON.stringify(g), before); assert.equal(r.drawStats.enemies, 0); assert.equal(r.drawStats.deaths, 1);
+  assert.ok(calls.some(([kind, property, value]) => kind === 'set' && property === 'strokeStyle' && value === '#fff0be'));
+  assert.equal(r.deathPose(proxy).stage, 'edge'); assert.equal(r.flash, 0);
+  assert.ok(r.deathPose(proxy).width < 1 && r.deathPose(proxy).height < 1, 'original silhouette is inset from the live body');
+});
+
+test('death snapshots move away from impact, stay narrow and survive source reuse and resize', () => {
+  for (const [dirX, dirZ, impact] of [[.6, .8, 'direct'], [-.6, -.8, 'blast'], [1, 0, 'chain']]) {
+    const { renderer: r } = renderer();
+    const source = { type: 'kill', x: .2, z: 220, dirX, dirZ, impact, enemyId: 7, heavy: true };
+    r.event(source); const proxy = r.deathProxies.items.find(p => p.active);
+    source.x = -10; source.z = 2000; source.dirX = -dirX;
+    r.update(.05); r.update(.05); const pose = r.deathPose(proxy);
+    assert.equal(proxy.x, .2); assert.equal(proxy.z, 220);
+    if (dirX) assert.ok((pose.x - proxy.x) * dirX > 0);
+    if (dirZ) assert.ok((pose.z - proxy.z) * dirZ > 0);
+    assert.ok(Math.abs(pose.x - proxy.x) <= .04375 + 1e-9 && Math.abs(pose.z - proxy.z) <= 17.5 + 1e-9);
+    assert.ok(pose.height < .4 && pose.width < .75, 'knockdown exposes the lane');
+    assert.ok(.45 * pose.width + 1.31 * Math.abs(pose.lean) < .45, 'lean cannot widen the silhouette past a live body');
+    r.resize(420, 700); const resized = r.deathPose(proxy), projected = r.project(resized.x, resized.z);
+    assert.equal(resized.x, pose.x); assert.equal(resized.z, pose.z);
+    assert.equal(resized.screenX, projected.x); assert.equal(resized.screenY, projected.y);
+    assert.notEqual(resized.screenX, pose.screenX);
+  }
+});
+
+test('missing, zero and malformed kill directions use a finite forward fallback', () => {
+  const { renderer: r } = renderer();
+  for (const direction of [{}, { dirX: 0, dirZ: 0 }, { dirX: Infinity, dirZ: NaN }, { dirX: 100, dirZ: -100 }]) {
+    r.reset(); r.event({ type: 'kill', x: 0, z: 180, ...direction });
+    const proxy = r.deathProxies.items.find(p => p.active);
+    assert.ok(Number.isFinite(proxy.dirX) && Number.isFinite(proxy.dirZ));
+    assert.ok(Math.abs(Math.hypot(proxy.dirX, proxy.dirZ) - 1) < 1e-9);
+    if (direction.dirX !== 100) { assert.equal(proxy.dirX, 0); assert.equal(proxy.dirZ, 1); }
+  }
+});
+
+test('death edge, directional fall and residue finish inside 170 ms', () => {
+  const { renderer: r } = renderer(); r.event({ type: 'kill', x: 0, z: 200, dirX: 1, dirZ: 0 });
+  const proxy = r.deathProxies.items.find(p => p.active);
+  assert.equal(r.deathPose(proxy).stage, 'edge');
+  r.update(1 / 30); assert.equal(r.deathPose(proxy).stage, 'edge', 'edge survives the first 30 fps frame');
+  r.update(.003); assert.equal(r.deathPose(proxy).stage, 'fall');
+  r.update(.05); r.update(.035); assert.equal(r.deathPose(proxy).stage, 'residue');
+  assert.equal(proxy.active, true); assert.ok(r.deathPose(proxy).height <= .18);
+  r.update(.048); assert.equal(proxy.active, true);
+  r.update(.002); assert.equal(proxy.active, false); assert.equal(r.deathProxies.count, 0);
+});
+
+test('death proxy pool has an independent hard cap and reuses only inactive snapshots', () => {
+  for (const reduced of [false, true]) {
+    const { renderer: r } = renderer(reduced);
+    for (let i = 0; i < 1000; i++) r.event({ type: 'kill', x: i / 1000, z: 200, enemyId: i, dirX: 0, dirZ: 1 });
+    assert.equal(r.deathProxies.capacity, 48); assert.equal(r.deathProxies.items.length, 48); assert.equal(r.deathProxies.count, 48);
+    assert.equal(r.particles.capacity, reduced ? 80 : 280); assert.equal(r.particles.count, r.particles.capacity);
+    assert.ok(r.deathProxies.items.every(p => !r.particles.items.includes(p)));
+    const before = JSON.stringify(r.deathProxies.items);
+    r.particles.clear(); r.burst(0, 0, '#fff', 280, 100);
+    assert.equal(JSON.stringify(r.deathProxies.items), before);
+    for (let i = 0; i < 4; i++) r.update(.05);
+    assert.equal(r.deathProxies.count, 0);
+    for (let i = 1000; i < 1048; i++) r.event({ type: 'kill', x: 0, z: 100, enemyId: i });
+    assert.equal(r.deathProxies.count, 48); assert.ok(r.deathProxies.items.every(p => p.enemyId >= 1000));
+    r.reset(); assert.equal(r.deathProxies.count, 0); assert.equal(r.particles.count, 0);
+  }
+});
+
+test('reduced-motion deaths are static faint silhouette fades with no bright edge or deformation', () => {
+  const { renderer: r, calls } = renderer(true);
+  r.event({ type: 'kill', x: -.2, z: 150, dirX: .8, dirZ: -.6, impact: 'blast', heavy: true });
+  const proxy = r.deathProxies.items.find(p => p.active), original = r.deathPose(proxy);
+  calls.length = 0; r.deathsBatch([proxy]);
+  const geometry = calls.filter(([name]) => ['moveTo', 'lineTo', 'ellipse', 'closePath'].includes(name));
+  assert.ok(!calls.some(([name]) => ['stroke', 'translate', 'scale', 'rotate'].includes(name)));
+  assert.ok(!calls.some(([name, property, value]) => name === 'set' && property === 'strokeStyle' && value === '#fff0be'));
+  for (let i = 0; i < 2; i++) {
+    r.update(.05); const current = r.deathPose(proxy);
+    for (const key of ['x', 'z', 'screenX', 'screenY', 'size', 'width', 'height', 'lean', 'stage']) assert.equal(current[key], original[key]);
+    assert.ok(current.alpha < original.alpha && current.alpha < .4);
+    calls.length = 0; r.deathsBatch([proxy]);
+    assert.deepEqual(calls.filter(([name]) => ['moveTo', 'lineTo', 'ellipse', 'closePath'].includes(name)), geometry);
+  }
+  for (const weapon of Object.keys(WEAPONS)) r.event({ type: 'fire', weapon });
+  assert.equal(r.recoil, 0); assert.equal(r.muzzle, 0); assert.equal(r.shake, 0); assert.equal(r.flash, 0);
+  r.update(.05); assert.equal(proxy.active, true); r.update(.01); assert.equal(proxy.active, false);
+});
+
+test('pause draws do not age death proxies and reset or motion toggles clear every transient', () => {
+  const { renderer: r } = renderer(), g = new Game(); g.start();
+  r.event({ type: 'kill', x: 0, z: 200, dirX: 1, dirZ: 0 }); r.event({ type: 'fire', weapon: 'cannon', x: 0 });
+  g.pause(); const before = JSON.stringify(r.deathProxies.items), recoil = r.recoil;
+  for (const visualTime of [1, 100, 1000]) r.draw(g, visualTime);
+  for (const dt of [0, -1, NaN, Infinity]) r.update(dt);
+  assert.equal(JSON.stringify(r.deathProxies.items), before); assert.equal(r.recoil, recoil);
+  r.update(10); assert.equal(r.deathProxies.items.find(p => p.active).age, .05, 'resume dt is bounded');
+  r.reset(); assert.equal(r.deathProxies.count, 0); assert.equal(r.recoil, 0); assert.equal(r.muzzle, 0);
+  r.event({ type: 'kill', x: 0, z: 200 }); r.event({ type: 'fire', weapon: 'cannon' }); r.setReducedMotion(true);
+  assert.equal(r.deathProxies.count, 0); assert.equal(r.recoil, 0); assert.equal(r.shake, 0);
+  r.event({ type: 'kill', x: 0, z: 200 }); r.setReducedMotion(false); assert.equal(r.deathProxies.count, 0);
+});
+
+test('death proxies respect exact gate occlusion rather than overlaying gate labels', () => {
+  const { renderer: r } = renderer(), g = new Game(), order = []; g.start();
+  g.gates = [{ z: 205, resolved: false }];
+  for (const z of [210, 200]) r.event({ type: 'kill', x: 0, z });
+  r.background = () => {}; r.squad = () => {}; r.effects = () => {};
+  r.gate = gate => order.push(['gate', gate.z]); r.deathsBatch = proxies => order.push(...proxies.map(p => ['death', p.z]));
+  r.draw(g, 0); assert.deepEqual(order, [['death', 210], ['gate', 205], ['death', 200]]);
+});
+
+test('rifle has a short beat while cannon kicks the whole squad with a longer bounded pulse', () => {
+  const pulses = {};
+  for (const weapon of ['rifle', 'cannon']) {
+    const { renderer: r, calls } = renderer(), g = new Game(); g.start(); g.weapon = weapon; g.squad = 42;
+    calls.length = 0; r.squad(g, 0); const baseline = calls.filter(([name]) => name === 'ellipse').slice(0, g.squad).map(call => call[2]);
+    const before = JSON.stringify(g); r.event({ type: 'fire', weapon, x: g.x });
+    pulses[weapon] = { muzzle: r.muzzle, recoil: r.recoil };
+    calls.length = 0; r.squad(g, 0); const fired = calls.filter(([name]) => name === 'ellipse').slice(0, g.squad).map(call => call[2]);
+    const kick = fired[0] - baseline[0]; pulses[weapon].kick = kick;
+    assert.ok(kick > 0 && kick <= 3.2 * r.width / 420 + 1e-9);
+    assert.ok(fired.every((y, i) => Math.abs(y - baseline[i] - kick) < 1e-9), 'one coherent squad impulse');
+    assert.equal(JSON.stringify(g), before, 'cosmetic recoil never changes controls, collision or actual projectiles');
+    r.update(.04); assert.equal(r.muzzle > 0, weapon === 'cannon');
+    for (let i = 0; i < 4; i++) r.update(.05);
+    assert.equal(r.recoil, 0); assert.equal(r.muzzle, 0);
+  }
+  assert.ok(pulses.cannon.muzzle > pulses.rifle.muzzle * 2);
+  assert.ok(pulses.cannon.recoil > pulses.rifle.recoil * 2);
+  assert.ok(pulses.cannon.kick > pulses.rifle.kick * 4);
+});
+
+test('chain impact appears exactly when an explosion event arrives and never from a queued or kill cue', () => {
+  const { renderer: r } = renderer();
+  r.event({ type: 'fire', weapon: 'cannon', x: 0, tier: 2 });
+  r.event({ type: 'kill', x: .2, z: 220, impact: 'chain' });
+  const ringCount = () => r.particles.items.filter(p => p.active && p.kind === 'ring').length;
+  for (let i = 0; i < 2; i++) r.update(.05);
+  assert.equal(ringCount(), 0, 'no renderer-owned timer or fake pre-hit');
+  r.event({ type: 'explosion', chain: true, x: .2, z: 220, radius: .34, depth: 95 });
+  assert.equal(ringCount(), 1); r.update(.05); assert.equal(ringCount(), 1);
+  for (let i = 0; i < 6; i++) r.update(.05);
+  assert.equal(ringCount(), 0, 'one event produces only one impact');
+});
+
+test('240 enemies, 768 bullets, full FX, 48 death proxies and readable gates stay under 600 draws', t => {
+  for (const reduced of [false, true]) {
+    const { renderer: r, calls, text } = renderer(reduced), g = new Game(); g.start();
+    g.squad = CONFIG.maxSquad; g.weapon = 'cannon'; g.weaponTier = 2;
+    g.gates = [110, 233, 388].map((z, id) => ({ id, z, resolved: false, left: recruit(-3), right: recruit(12) }));
+    for (let id = 0; id < CONFIG.maxEnemies; id++) g.enemies.take({ id, x: (id % 16 - 7.5) * .105, z: 160 + Math.floor(id / 16) * 22, hp: 1, maxHP: 2, heavy: id % 48 === 0, phase: id, hit: id % 5 ? 0 : .04 });
+    for (let i = 0; i < CONFIG.maxBullets; i++) g.bullets.take({ x: (i % 25 - 12) * .06, z: 30 + (i % 32) * 24, weapon: 'scatter', tier: 2, radius: .035, vx: (i % 7 - 3) * .38, speed: 1150 });
+    for (let id = 0; id < 48; id++) {
+      r.event({ type: 'kill', x: (id % 16 - 7.5) * .105, z: 150 + id * 6, heavy: id % 7 === 0, dirX: id % 2 ? 1 : -1, dirZ: .5, impact: 'blast', enemyId: id });
+      const p = r.deathProxies.items.find(p => p.active && p.enemyId === id); p.age = .01 + id % 3 * .055; p.life = p.maxLife - p.age;
+    }
+    while (r.particles.take({ kind: 'chunk', x: 100, y: 200, size: 3, color: '#152332', life: .14, maxLife: .31, vx: 0, vy: 0 })) {}
+    r.event({ type: 'fire', x: 0, weapon: 'cannon', tier: 2 });
+    const before = JSON.stringify(g); calls.length = 0; text.length = 0; r.draw(g, 10);
+    const draws = calls.filter(([name]) => ['fill', 'stroke', 'fillRect', 'strokeRect', 'fillText', 'drawImage'].includes(name)).length;
+    assert.equal(JSON.stringify(g), before); assert.equal(r.drawStats.enemies, 240); assert.equal(r.drawStats.bullets, 768); assert.equal(r.drawStats.deaths, 48);
+    assert.equal(r.deathProxies.items.length, 48); assert.equal(r.particles.count, reduced ? 80 : 280);
+    assert.equal(text.filter(([value]) => value === '-3').length, 3); assert.equal(text.filter(([value]) => value === '+12').length, 3);
+    assert.ok(draws < 600, `Measured ${draws} Canvas draws`);
+    t.diagnostic(`${reduced ? 'Reduced' : 'Normal'} motion: ${draws} draws, ${r.drawStats.deathBatches} death batches; 240 live enemies / 768 actual projectiles / 48 cosmetic proxies`);
+  }
+});

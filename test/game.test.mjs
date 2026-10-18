@@ -245,7 +245,7 @@ for (const level of LEVELS) {
       const { game, summary: s } = complete(style, 60, level.id);
       assert.equal(game.mode, ['poor', 'center'].includes(style) ? 'lost' : 'won', style);
       assert.equal(s.missingShots, 0); assert.ok(s.maxBullets <= CONFIG.maxBullets && s.maxEnemies <= CONFIG.maxEnemies); assert.equal(s.result.reloads, 0);
-      if (s.result.won) { assert.ok(s.result.time >= 44 && s.result.time <= 60); assert.equal(s.bossHP, 0); assert.equal(s.bossStart.enemies, 0); assert.equal(s.bossPhases, 1); }
+      if (s.result.won) { assert.ok(s.result.time >= 44 && s.result.time <= 60); assert.equal(s.bossHP, 0); assert.ok(s.bossStart.enemies <= 48); assert.ok(s.bossStart.enemyWaves.every(wave => wave === 41)); assert.equal(s.bossPhases, 1); }
     }
     const good = complete('good', 60, level.id).summary, average = complete('average', 60, level.id).summary;
     assert.ok(good.result.time < average.result.time); assert.ok(good.result.squad > average.result.squad);
@@ -333,17 +333,149 @@ test('each weapon has a materially larger actual damage footprint at every tier,
   }
 });
 
-test('tier2 cannon produces exactly one bounded chain and respects numeric gate barriers', () => {
+function chainFixture({ hp = 2 } = {}) {
+  const g = bare(); g.fireTimer = 999;
+  const direct = enemy(g, { x: 0, z: 200, hp, maxHP: hp, radius: .02 });
+  const primary = enemy(g, { x: .3, z: 250, hp, maxHP: hp, radius: .02 });
+  const delayed = enemy(g, { x: .6, z: 290, hp, maxHP: hp, radius: .02 });
+  const farther = enemy(g, { x: .9, z: 360, hp, maxHP: hp, radius: .02 });
+  const round = shot(g, { weapon: 'cannon', tier: 2, batch: 17, damage: 5.5 });
+  while (!g.pendingChains.length) g.update(CONFIG.step);
+  return { g, direct, primary, delayed, farther, round, impactTime: g.time };
+}
+
+test('tier2 cannon waits exactly 100ms before one real chain damage and explosion tick', () => {
+  const { g, delayed, farther, impactTime } = chainFixture();
+  assert.equal(g.stats.kills, 2); assert.equal(delayed.hp, 2); assert.equal(farther.hp, 2);
+  const first = g.drainEvents().filter(e => e.type === 'explosion'); assert.equal(first.length, 1); assert.equal(first[0].chain, false);
+  assert.equal(first[0].batch, 17); close(first[0].time, impactTime);
+  for (let i = 0; i < 11; i++) g.update(CONFIG.step);
+  assert.equal(delayed.hp, 2); assert.equal(g.drainEvents().filter(e => e.type === 'explosion').length, 0);
+  g.update(CONFIG.step); assert.equal(delayed.active, false); assert.equal(g.stats.kills, 3); assert.equal(g.pendingChains.length, 0);
+  const events = g.drainEvents(), blast = events.find(e => e.type === 'explosion'), kill = events.find(e => e.type === 'kill');
+  assert.equal(blast.chain, true); assert.equal(blast.batch, 17); close(blast.time - impactTime, CONFIG.chainDelay);
+  assert.equal(kill.impact, 'chain'); close(kill.time, blast.time); assert.equal(farther.hp, 2);
+  ticks(g, .5); assert.equal(g.stats.kills, 3); assert.equal(g.pendingChains.length, 0); assert.ok(!g.drainEvents().some(e => e.type === 'explosion'));
+});
+
+test('tier2 cannon caps one primary at 48 and one delayed hop at 24 distinct victims', () => {
   const g = bare(); g.fireTimer = 999;
   for (let row = 0; row < 12; row++) for (let col = 0; col < 19; col++) enemy(g, { x: -.49 + (col - 9) * .025, z: 200 + row * 10, hp: 2, maxHP: 2, radius: .02 });
   shot(g, { x: -.49, weapon: 'cannon', tier: 2, damage: 5.5 }); g.update(.1);
-  assert.ok(g.stats.kills > 24 && g.stats.kills <= 72);
-  const blasts = g.drainEvents().filter(e => e.type === 'explosion'); assert.equal(blasts.length, 2); assert.deepEqual(blasts.map(e => e.chain), [false, true]);
+  assert.equal(g.stats.kills, 48); assert.equal(g.pendingChains.length, 1);
+  ticks(g, CONFIG.chainDelay); assert.equal(g.stats.kills, 72);
+  const blasts = g.drainEvents().filter(e => e.type === 'explosion'); assert.deepEqual(blasts.map(e => e.chain), [false, true]);
+  close(blasts[1].time - blasts[0].time, CONFIG.chainDelay);
+});
+
+test('delayed chains never re-damage surviving direct or primary-blast victims', () => {
+  const { g, direct, primary, delayed, farther } = chainFixture({ hp: 100 });
+  close(direct.hp, 94.5); close(primary.hp, 96.15); assert.equal(delayed.hp, 100);
+  ticks(g, CONFIG.chainDelay);
+  close(direct.hp, 94.5); close(primary.hp, 96.15); close(delayed.hp, 96.15); assert.equal(farther.hp, 100);
+});
+
+test('delayed chains recheck current positions, nearest-depth order and numeric gate barriers', () => {
+  const { g, delayed } = chainFixture();
+  const nearer = enemy(g, { x: .6, z: 280, hp: 2 }), behind = enemy(g, { x: .6, z: 330, hp: 2 });
+  g.pendingChains[0].limit = 1; delayed.z = 600;
+  g.spawnGate({ z: 320, left: recruit(1), right: recruit(1) });
+  ticks(g, CONFIG.chainDelay); assert.equal(nearer.active, false); assert.equal(delayed.hp, 2); assert.equal(behind.hp, 2);
+  const gateCase = chainFixture(); gateCase.delayed.z = 330;
+  gateCase.g.spawnGate({ z: 320, left: recruit(1), right: recruit(1) });
+  ticks(gateCase.g, CONFIG.chainDelay); assert.equal(gateCase.delayed.hp, 2);
   const h = bare(); h.fireTimer = 999; enemy(h, { x: -.49, z: 180, hp: 2 });
-  const behind = Array.from({ length: 10 }, (_, i) => enemy(h, { x: -.49, z: 245 + i, hp: 2 }));
+  const shielded = Array.from({ length: 10 }, (_, i) => enemy(h, { x: -.49, z: 245 + i, hp: 2 }));
   h.spawnGate({ z: 220, left: recruit(-2, 8, 1), right: recruit(3) });
-  shot(h, { x: -.49, z: 150, weapon: 'cannon', tier: 2, damage: 5.5 }); h.update(.1);
-  assert.ok(behind.every(e => e.hp === 2));
+  shot(h, { x: -.49, z: 150, weapon: 'cannon', tier: 2, damage: 5.5 }); h.update(.1); ticks(h, CONFIG.chainDelay);
+  assert.ok(shielded.every(e => e.hp === 2));
+});
+
+test('pause freezes the delayed chain clock, damage and stored snapshot until resumed', () => {
+  const { g, delayed, impactTime } = chainFixture(); ticks(g, .05); g.drainEvents();
+  const before = JSON.stringify(g.pendingChains), time = g.time; g.pause(); ticks(g, 10);
+  assert.equal(g.time, time); assert.equal(JSON.stringify(g.pendingChains), before); assert.equal(delayed.hp, 2);
+  g.resume(); ticks(g, .05); assert.equal(delayed.active, false);
+  close(g.drainEvents().find(e => e.type === 'explosion').time - impactTime, .1);
+});
+
+test('reset, victory and defeat clear every delayed chain without stale damage', () => {
+  for (const end of ['reset', 'win', 'lose']) {
+    const { g, delayed } = chainFixture(); g.drainEvents();
+    if (end === 'reset') g.reset('playing'); else g.finish(end === 'win', end === 'win' ? 'boss' : 'timeout');
+    assert.equal(g.pendingChains.length, 0); ticks(g, .2);
+    assert.ok(!g.drainEvents().some(e => e.type === 'explosion' && e.chain));
+    if (end !== 'reset') assert.equal(delayed.hp, 2);
+  }
+});
+
+test('delayed snapshots survive projectile and source-enemy pool reuse without stale references', () => {
+  const { g, primary, round, delayed } = chainFixture();
+  const saved = structuredClone(g.pendingChains[0]); g.enemies.cursor = g.enemies.items.indexOf(primary);
+  const replacement = enemy(g, { x: .55, z: 260, hp: 100 }); assert.equal(replacement, primary); assert.notEqual(replacement.id, saved.sourceId);
+  g.bullets.cursor = g.bullets.items.indexOf(round);
+  const nextRound = shot(g, { x: -.8, z: 30, weapon: 'rifle', damage: 999, tier: 0, batch: 999, speed: 1 }); assert.equal(nextRound, round);
+  g.setWeapon('pierce'); assert.deepEqual(g.pendingChains[0], saved);
+  ticks(g, CONFIG.chainDelay); close(replacement.hp, 96.15); assert.equal(delayed.active, false);
+  const blast = g.drainEvents().find(e => e.type === 'explosion' && e.chain); assert.equal(blast.tier, 2); assert.equal(blast.batch, 17);
+});
+
+test('chain reservation pressure defers entire future salvos and completes every reserved round', () => {
+  const g = bare(); g.setPowerTier(2); g.setWeapon('cannon'); g.squad = 42; g.fireTimer = 999;
+  for (let i = 0; i < CONFIG.maxChainSalvos; i++) assert.equal(g.fire(), true);
+  assert.equal(g.bullets.count, CONFIG.maxPendingChains); assert.equal(g.fire(), false); assert.equal(g.bullets.count, CONFIG.maxPendingChains);
+  const direct = enemy(g, { x: 0, z: 200, hp: 100000 }), primary = enemy(g, { x: .3, z: 250, hp: 100000 });
+  g.enemyGrid.rebuild(g.enemies.items);
+  for (const round of g.bullets.items) if (round.active) { g.explode(round, direct); round.active = false; }
+  assert.equal(g.pendingChains.length, CONFIG.maxPendingChains); assert.equal(new Set(g.pendingChains.map(chain => chain.batch)).size, CONFIG.maxChainSalvos);
+  assert.equal(g.fire(), false); assert.equal(g.bullets.count, 0); ticks(g, CONFIG.chainDelay);
+  assert.equal(g.pendingChains.length, 0); assert.equal(g.fire(), true); assert.equal(g.bullets.count, 42); assert.ok(primary.active);
+});
+
+test('kill direction snapshots distinguish forward direct hits and outward blast/chain hits', () => {
+  const g = bare(); g.fireTimer = 999;
+  for (const vx of [-.38, 0, .38]) {
+    const target = enemy(g, { hp: 1 }); g.damageEnemy(target, 1, { weapon: 'scatter', vx });
+    const event = g.drainEvents().find(e => e.type === 'kill'); assert.equal(event.dirX, vx); assert.equal(event.dirZ, 1); assert.equal(event.impact, 'direct'); assert.equal(target.active, false);
+  }
+  for (const impact of ['blast', 'chain']) for (const [x, z] of [[.3, 230], [-.3, 170], [0, 200]]) {
+    const target = enemy(g, { x, z, hp: 1 }); g.damageEnemy(target, 1, { weapon: 'cannon' }, impact, { x: 0, z: 200 });
+    const event = g.drainEvents().find(e => e.type === 'kill'); assert.equal(event.impact, impact);
+    for (const direction of [event.dirX, event.dirZ]) assert.ok(Number.isFinite(direction) && Math.abs(direction) <= 1);
+    close(Math.hypot(event.dirX, event.dirZ), 1); if (x) assert.equal(Math.sign(event.dirX), Math.sign(x)); if (z !== 200) assert.equal(Math.sign(event.dirZ), Math.sign(z - 200));
+  }
+});
+
+test('a killed body immediately stops contact and projectile collision while only its value event remains', () => {
+  const g = bare(); g.fireTimer = 999;
+  const target = enemy(g, { hp: 1, z: 24 }); g.damageEnemy(target, 1, { vx: .2 });
+  const valueEvent = g.drainEvents().find(event => event.type === 'kill'); assert.equal(target.active, false);
+  g.update(CONFIG.step); assert.equal(g.squad, g.level.initialSquad); assert.equal(g.enemies.count, 0);
+  const far = enemy(g, { z: 220, hp: 100 }); target.x = .75; target.z = 500;
+  shot(g, { z: 170 }); g.update(.1); assert.equal(far.hp, 99); assert.equal(valueEvent.x, 0); assert.equal(valueEvent.z, 24);
+});
+
+test('real chain explosion beats survive cosmetic and redundant blast event pressure', () => {
+  const g = bare();
+  for (let i = 0; i < 256; i++) g.emit('hit');
+  g.emit('explosion', { batch: 1, chain: false, time: 0 }); g.emit('explosion', { batch: 1, chain: true, time: .1 });
+  for (let i = 0; i < 240; i++) g.emit('kill', { enemyId: i });
+  for (let i = 0; i < 300; i++) g.emit('explosion', { batch: 1, chain: true, time: .1 });
+  g.finish(false, 'timeout'); assert.equal(g.events.length, 256);
+  assert.equal(g.events.filter(e => e.type === 'kill').length, 240);
+  assert.equal(g.events.filter(e => e.type === 'explosion' && e.chain).length, 1); assert.equal(g.events.at(-1).type, 'lose');
+});
+
+test('100ms chain damage and event times are identical at 30/60/120/144 render fps', () => {
+  const run = fps => {
+    const { g, impactTime } = chainFixture(); const events = g.drainEvents();
+    const stepper = new FixedStepper(dt => { g.update(dt); events.push(...g.drainEvents()); });
+    for (let frame = 0; frame < fps / 2; frame++) stepper.advance(1 / fps);
+    return { kills: g.stats.kills, damage: g.stats.damage, pending: g.pendingChains.length,
+      blasts: events.filter(e => e.type === 'explosion').map(e => ({ ...e, time: e.time - impactTime })),
+      killsAt: events.filter(e => e.type === 'kill').map(e => [e.enemyId, e.impact, e.time - impactTime]) };
+  };
+  const expected = run(60); for (const fps of [30, 120, 144]) assert.deepEqual(run(fps), expected);
 });
 
 test('spatial broadphase returns each in-range enemy once and keeps worst-case candidate work below a full cross-product', () => {
@@ -419,7 +551,22 @@ test('tiered real rounds still hit the nearest target and numeric gates absorb t
   }
 });
 
-test('a catch-up jump does not resurrect expired hordes or exhaust the enemy pool', () => {
+test('a catch-up jump ages the new showcase without resurrecting expired hordes or exhausting the pool', () => {
   const g = new Game(); g.start(); g.time = 42; assert.doesNotThrow(() => g.update(CONFIG.step));
-  assert.equal(g.enemies.count, 0); assert.equal(g.pendingEnemies.length, 0); assert.ok(g.boss);
+  assert.ok(g.enemies.count <= 48); assert.ok(g.enemies.items.filter(enemy => enemy.active).every(enemy => enemy.wave === 41)); assert.equal(g.pendingEnemies.length, 0); assert.ok(g.boss);
+});
+
+
+test('every level offers a fresh bounded low-HP showcase immediately after the final gate', () => {
+  for (const level of LEVELS) {
+    const gate = level.gates.at(-1), arrival = gate.at + (gate.z - CONFIG.gateZ) / CONFIG.roadSpeed;
+    const wave = level.waves.find(wave => wave.at === 41); assert.ok(wave); assert.equal(wave.hp, 1);
+    assert.ok(wave.at > arrival && wave.at - arrival < .6); assert.ok(wave.count * wave.rows <= 48);
+    for (const style of PROFILE_NAMES) {
+      const s = complete(style, 60, level.id).summary;
+      assert.ok(s.maxPendingChains <= CONFIG.maxPendingChains); assert.ok(s.maxReservedChains <= CONFIG.maxPendingChains); assert.ok(s.maxChainSalvos <= CONFIG.maxChainSalvos);
+      assert.equal(s.result.reloads, 0);
+      if (!['poor', 'center'].includes(style)) { close(s.showcase.at, 41 + CONFIG.step, CONFIG.step + 1e-8); assert.ok(s.showcase.count > 0); assert.ok(s.showcase.killsBefore44 > 0, `${level.id}/${style}`); }
+    }
+  }
 });

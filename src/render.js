@@ -13,8 +13,27 @@ const signed = value => value > 0 ? `+${value}` : `${value}`;
 const DEPTH_SLICE = 32;
 const ENEMY_INK = '#152332';
 const ENEMY_RIM = '#485768';
+const DEATH_CAPACITY = 48;
+const DEATH_EDGE_TIME = .035, DEATH_FALL_TIME = .12, DEATH_LIFE = .17;
+const FIRE_FEEDBACK = {
+  rifle: { muzzle: .035, recoil: .065, kick: .7, footprint: .07 },
+  scatter: { muzzle: .055, recoil: .1, kick: 1.4, footprint: .11 },
+  pierce: { muzzle: .04, recoil: .075, kick: 1, footprint: .08 },
+  cannon: { muzzle: .085, recoil: .16, kick: 3.2, footprint: .18 },
+};
+const ENEMY_BODY_POINTS = [[-.45, -.64], [-.42, -.32], [-.27, -.4], [-.29, 0], [-.07, 0], [0, -.23], [.07, 0], [.29, 0], [.27, -.4], [.42, -.32], [.45, -.64], [.26, -.87]];
 const weaponColor = weapon => WEAPONS[weapon]?.color || WEAPON_COLORS[weapon] || C.cyan;
 function roundRect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+// The death proxy keeps the same head, shoulders and split feet as a live enemy.
+// Deforming path coordinates avoids 48 individual Canvas transforms/draw layers.
+function enemySilhouette(ctx, x, y, s, width = 1, height = 1, lean = 0) {
+  const px = (a, b) => x + s * (a * width - b * lean), py = b => y + s * b * height;
+  ctx.moveTo(px(.23, -1.08), py(-1.08));
+  ctx.ellipse(px(0, -1.08), py(-1.08), s * .23 * width, s * .23 * height, 0, 0, Math.PI * 2);
+  ctx.moveTo(px(-.26, -.87), py(-.87));
+  for (const [a, b] of ENEMY_BODY_POINTS) ctx.lineTo(px(a, b), py(b));
+  ctx.closePath();
+}
 
 export class Renderer {
   constructor(canvas, { reducedMotion = false } = {}) {
@@ -22,17 +41,22 @@ export class Renderer {
     this.ctx = canvas.getContext('2d', { alpha: false });
     this.reducedMotion = reducedMotion;
     this.particles = new ObjectPool(reducedMotion ? 80 : 280);
+    // Cosmetic snapshots only. This pool never participates in game collisions,
+    // and a full particle pool cannot swallow a one-hit enemy's death silhouette.
+    this.deathProxies = new ObjectPool(DEATH_CAPACITY);
     this.labels = [];
     this.shake = 0;
     this.flash = 0;
     this.beam = null;
     this.muzzle = 0;
+    this.recoil = 0;
+    this.fireWeapon = 'rifle';
     this.width = 420;
     this.height = 700;
     this.dpr = 1;
     this.palettes = {};
     this.killBatch = { count: 0, x: 0, z: 0, age: 0 };
-    this.drawStats = { enemyBatches: 0, bulletBatches: 0, enemies: 0, bullets: 0 }; 
+    this.drawStats = { enemyBatches: 0, bulletBatches: 0, deathBatches: 0, enemies: 0, bullets: 0, deaths: 0 };
   }
 
   setReducedMotion(enabled) {
@@ -66,8 +90,9 @@ export class Renderer {
   }
 
   reset() {
-    this.particles.clear(); this.labels.length = 0;
-    this.shake = 0; this.flash = 0; this.beam = null; this.muzzle = 0;
+    this.particles.clear(); this.deathProxies.clear(); this.labels.length = 0;
+    this.shake = 0; this.flash = 0; this.beam = null; this.muzzle = 0; this.recoil = 0;
+    this.fireWeapon = 'rifle';
     this.killBatch = { count: 0, x: 0, z: 0, age: 0 };
   }
 
@@ -87,7 +112,7 @@ export class Renderer {
   ring(x, z, color, radius = .24, depth = 0, kind = 'ring') {
     const p = this.project(x, z);
     const ry = depth > 0 ? Math.abs(this.project(x, z - depth).y - this.project(x, z + depth).y) / 2 : 7 * p.s;
-    this.particles.take({ kind, x: p.x, y: p.y - (kind === 'footprint' ? 0 : 7 * p.s),
+    return this.particles.take({ kind, x: p.x, y: p.y - (kind === 'footprint' ? 0 : 7 * p.s),
       radius: Math.max(8, radius * this.width * .455 * p.s), radiusY: Math.max(4, ry),
       life: this.reducedMotion ? .22 : kind === 'footprint' ? .14 : .3,
       maxLife: this.reducedMotion ? .22 : kind === 'footprint' ? .14 : .3,
@@ -95,8 +120,17 @@ export class Renderer {
   }
 
   death(e) {
-    // Two dark fragments per ordinary death, three per heavy. No separate corpse
-    // list: hits, chunks, upgrade sparks and real blast footprints share one pool.
+    // Copy world coordinates/direction; an enemy pool slot may be reused on the
+    // very next step. A proxy has no HP, radius or reference to the dead enemy.
+    let dirX = Number.isFinite(e.dirX) ? clamp(e.dirX, -1, 1) : 0;
+    let dirZ = Number.isFinite(e.dirZ) ? clamp(e.dirZ, -1, 1) : 1;
+    const length = Math.hypot(dirX, dirZ);
+    if (length > 1e-6) { dirX /= length; dirZ /= length; } else { dirX = 0; dirZ = 1; }
+    const life = this.reducedMotion ? .16 : DEATH_LIFE;
+    this.deathProxies.take({ x: e.x, z: e.z, dirX, dirZ, heavy: Boolean(e.heavy),
+      enemyId: e.enemyId, impact: e.impact === 'blast' || e.impact === 'chain' ? e.impact : 'direct',
+      age: 0, life, maxLife: life });
+    // Existing tiny fragments still share the finite FX pool with sparks/rings.
     const p = this.project(e.x, e.z), size = (e.heavy ? 36 : 23) * p.s * this.width / 420;
     const count = this.reducedMotion ? 1 : e.heavy ? 3 : 2;
     for (let i = 0; i < count; i++) {
@@ -131,8 +165,14 @@ export class Renderer {
   event(e) {
     const color = weaponColor(e.weapon);
     if (e.type === 'fire') {
-      if (!this.reducedMotion) this.muzzle = .06;
-      this.ring(e.x || 0, 0, color, .13 + (e.tier || 0) * .065, 0, 'footprint');
+      const feedback = FIRE_FEEDBACK[e.weapon] || FIRE_FEEDBACK.rifle;
+      if (!this.reducedMotion) {
+        this.fireWeapon = e.weapon in FIRE_FEEDBACK ? e.weapon : 'rifle';
+        this.muzzle = feedback.muzzle; this.recoil = feedback.recoil;
+        if (this.fireWeapon === 'cannon') this.shake = Math.max(this.shake, .04);
+      }
+      const footprint = this.ring(e.x || 0, 0, color, .13 + (e.tier || 0) * .065, 0, 'footprint');
+      if (footprint && !this.reducedMotion) footprint.life = footprint.maxLife = feedback.footprint;
     }
     // Fodder's own short hit tint is enough; no per-hit particle storm.
     if (e.type === 'hitBoss') this.burst(e.x, e.z, '#ffcba0', 2, 30);
@@ -189,6 +229,12 @@ export class Renderer {
     this.shake = Math.max(0, this.shake - safeDt);
     this.flash = Math.max(0, this.flash - safeDt);
     this.muzzle = Math.max(0, this.muzzle - safeDt);
+    this.recoil = Math.max(0, this.recoil - safeDt);
+    for (const proxy of this.deathProxies.items) {
+      if (!proxy.active) continue;
+      proxy.age += safeDt; proxy.life = Math.max(0, proxy.maxLife - proxy.age);
+      if (proxy.life <= 1e-9) proxy.active = false;
+    }
     if (this.beam) { this.beam.life -= safeDt; if (this.beam.life <= 0) this.beam = null; }
     for (const p of this.particles.items) {
       if (!p.active) continue;
@@ -211,12 +257,13 @@ export class Renderer {
     if (game.boss?.attack) this.warning(game.boss.attack, game.time, false);
     if (this.beam) this.drawBeam(this.beam);
     const objects = [], idle = game.mode === 'ready';
-    this.drawStats = { enemyBatches: 0, bulletBatches: 0, enemies: 0, bullets: 0 };
+    this.drawStats = { enemyBatches: 0, bulletBatches: 0, deathBatches: 0, enemies: 0, bullets: 0, deaths: 0 };
     // The ready overlay owns the center. Every other actor uses its actual
     // gameplay position; removed bodies leave real gaps instead of painted fog.
     if (!idle) {
       for (const gate of game.gates) if (!gate.resolved) objects.push({ entity: gate, z: gate.z, kind: 'gate' });
       for (const enemy of game.enemies.items) if (enemy.active) objects.push({ entity: enemy, z: enemy.z, kind: 'enemy' });
+      for (const proxy of this.deathProxies.items) if (proxy.active) objects.push({ entity: proxy, z: this.deathPose(proxy).z, kind: 'death' });
       if (game.boss && game.mode !== 'won') objects.push({ entity: game.boss, z: game.boss.z, kind: 'boss' });
     }
     for (const bullet of game.bullets.items) if (bullet.active) objects.push({ entity: bullet, z: bullet.z, kind: 'bullet' });
@@ -224,13 +271,14 @@ export class Renderer {
     let group = [], slice = null;
     const flush = () => {
       if (!group.length) return;
-      const enemies = [], bullets = [];
-      for (const item of group) (item.kind === 'enemy' ? enemies : bullets).push(item.entity);
+      const enemies = [], bullets = [], deaths = [];
+      for (const item of group) (item.kind === 'enemy' ? enemies : item.kind === 'death' ? deaths : bullets).push(item.entity);
       // Approximate ordering only inside one 32-unit depth slice. Gate/boss
       // barriers flush both batches at their exact depth, so shots never show
       // through a nearer gate. Depth extent is much shorter than a bullet trail.
       if (bullets.length === 1) this.bullet(bullets[0]);
       else if (bullets.length) this.bulletsBatch(bullets);
+      if (deaths.length) this.deathsBatch(deaths);
       if (enemies.length === 1) this.enemy(enemies[0], visualTime);
       else if (enemies.length) this.enemiesBatch(enemies, visualTime);
       group = [];
@@ -443,6 +491,43 @@ export class Renderer {
 
   enemy(e, time) { this.enemiesBatch([e], time); }
 
+  deathPose(proxy) {
+    const reduced = this.reducedMotion;
+    const fall = reduced ? 0 : clamp((proxy.age - DEATH_EDGE_TIME) / (DEATH_FALL_TIME - DEATH_EDGE_TIME), 0, 1);
+    const travel = fall * (2 - fall), strength = proxy.impact === 'direct' ? 1 : 1.25;
+    const x = proxy.x + proxy.dirX * .035 * travel * strength;
+    const z = proxy.z + proxy.dirZ * 14 * travel * strength;
+    const p = this.project(x, z), stage = reduced ? 'fade' : proxy.age < DEATH_EDGE_TIME ? 'edge' : proxy.age < DEATH_FALL_TIME ? 'fall' : 'residue';
+    return { x, z, screenX: p.x, screenY: p.y, size: (proxy.heavy ? 43 : 24) * p.s * this.width / 420,
+      // Even the first frame is inset. The later narrow, low silhouette exposes
+      // the cleared lane immediately instead of replacing it with corpse fog.
+      width: .91 - .28 * fall, height: .91 - .74 * fall, lean: proxy.dirX * .08 * fall,
+      stage, alpha: reduced ? .38 * proxy.life / proxy.maxLife : stage === 'edge' ? .95 : stage === 'fall' ? .76 - .2 * fall : .35 * clamp(proxy.life / (DEATH_LIFE - DEATH_FALL_TIME), 0, 1) };
+  }
+
+  deathsBatch(proxies) {
+    const { ctx } = this, groups = new Map(), unit = this.width / 420;
+    for (const proxy of proxies) {
+      const pose = this.deathPose(proxy), alpha = Math.ceil(clamp(pose.alpha, 0, 1) * 8) / 8;
+      const key = `${proxy.heavy}:${pose.stage}:${alpha}`;
+      if (!groups.has(key)) groups.set(key, { heavy: proxy.heavy, stage: pose.stage, alpha, poses: [] });
+      groups.get(key).poses.push(pose);
+    }
+    ctx.save();
+    for (const { heavy, stage, alpha, poses } of groups.values()) {
+      ctx.globalAlpha = alpha; ctx.fillStyle = heavy ? '#252936' : ENEMY_INK;
+      ctx.strokeStyle = stage === 'edge' ? '#fff0be' : heavy ? '#9d805f' : ENEMY_RIM;
+      ctx.lineWidth = Math.max(.65, unit * (stage === 'edge' ? 1.25 : .75));
+      ctx.beginPath();
+      for (const p of poses) enemySilhouette(ctx, p.screenX, p.screenY, p.size, p.width, p.height, p.lean);
+      ctx.fill();
+      if (stage === 'edge' || stage === 'fall') ctx.stroke();
+      this.drawStats.deathBatches++;
+    }
+    this.drawStats.deaths += proxies.length;
+    ctx.restore();
+  }
+
   enemiesBatch(enemies, time = 0) {
     const { ctx } = this, groups = new Map(), unit = this.width / 420;
     for (const e of enemies) {
@@ -464,13 +549,7 @@ export class Renderer {
       for (const { x, y, size: s } of points) {
         // A rounded head, angular shoulders and separated feet read as a compact
         // rushing crowd rather than pink boxes. One compound path per depth row.
-        ctx.moveTo(x + s * .23, y - s * 1.08); ctx.arc(x, y - s * 1.08, s * .23, 0, Math.PI * 2);
-        ctx.moveTo(x - s * .26, y - s * .87); ctx.lineTo(x - s * .45, y - s * .64);
-        ctx.lineTo(x - s * .42, y - s * .32); ctx.lineTo(x - s * .27, y - s * .4);
-        ctx.lineTo(x - s * .29, y); ctx.lineTo(x - s * .07, y); ctx.lineTo(x, y - s * .23);
-        ctx.lineTo(x + s * .07, y); ctx.lineTo(x + s * .29, y); ctx.lineTo(x + s * .27, y - s * .4);
-        ctx.lineTo(x + s * .42, y - s * .32); ctx.lineTo(x + s * .45, y - s * .64);
-        ctx.lineTo(x + s * .26, y - s * .87); ctx.closePath();
+        enemySilhouette(ctx, x, y, s);
       }
       ctx.fill(); ctx.stroke();
       ctx.fillStyle = heavy ? '#f3b66e' : '#c38270'; ctx.beginPath();
@@ -511,9 +590,11 @@ export class Renderer {
   squad(game, time) {
     const { ctx } = this, weapon = game.weapon || 'rifle', color = weaponColor(weapon), tier = game.weaponTier || 0;
     const soldiers = [], size = 13 * this.width / 420;
+    const feedback = FIRE_FEEDBACK[this.fireWeapon] || FIRE_FEEDBACK.rifle;
+    const kick = this.reducedMotion ? 0 : feedback.kick * this.width / 420 * (this.recoil / feedback.recoil) ** 2;
     for (let i = 0; i < game.squad; i++) {
       const o = squadOffset(i, game.squad), projected = this.project(game.x + o.x, o.z);
-      soldiers.push({ x: this.project(game.x + o.x, 0).x, y: projected.y + (this.reducedMotion ? 0 : Math.sin(time * 13 + i * .9) * 1.2) });
+      soldiers.push({ x: this.project(game.x + o.x, 0).x, y: projected.y + kick + (this.reducedMotion ? 0 : Math.sin(time * 13 + i * .9) * 1.2) });
     }
     ctx.save(); if (game.time < game.hurtUntil) ctx.globalAlpha = .65;
     const layer = (fill, shape) => {
@@ -532,7 +613,15 @@ export class Renderer {
     layer(color, (x, y) => { ctx.rect(x - size * .26, y - size * 1.61, size * .18, size * .07); ctx.rect(x + size * .43, y - size * (.78 + barrelLength), size * barrelWidth, size * barrelLength); });
     if (weapon === 'scatter' || tier > 0) layer(tier >= 2 ? '#ffe4a3' : '#fff0c8', (x, y) => ctx.rect(x + size * .4, y - size * 1.65, size * .3, size * .12));
     if (!this.reducedMotion && this.muzzle > 0 && game.mode === 'playing') layer(color, (x, y) => {
-      ctx.moveTo(x + size * .56, y - size * 1.65); ctx.lineTo(x + size * .28, y - size * 2.15); ctx.lineTo(x + size * .56, y - size * 2); ctx.lineTo(x + size * .8, y - size * 2.15); ctx.closePath();
+      const mx = x + size * .56, my = y - size * 1.65;
+      if (weapon === 'cannon') {
+        const radius = size * (.17 + .1 * this.muzzle / feedback.muzzle);
+        ctx.moveTo(mx + radius, my - size * .17); ctx.ellipse(mx, my - size * .17, radius, radius * .7, 0, 0, Math.PI * 2);
+      } else {
+        const spread = weapon === 'scatter' ? .3 : .16, reach = weapon === 'pierce' ? .5 : .38;
+        ctx.moveTo(mx, my); ctx.lineTo(mx - size * spread, my - size * reach);
+        ctx.lineTo(mx, my - size * reach * .7); ctx.lineTo(mx + size * spread, my - size * reach); ctx.closePath();
+      }
     });
     const p = this.project(game.x, 0); ctx.strokeStyle = '#d9ff6877'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(p.x - 13, p.y + 13); ctx.lineTo(p.x, p.y + 19); ctx.lineTo(p.x + 13, p.y + 13); ctx.stroke(); ctx.restore();

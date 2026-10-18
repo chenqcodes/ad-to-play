@@ -21,7 +21,7 @@ function pause() { if (game.mode !== 'playing') return; game.pause(); audio?.sil
 function startOrResume() {
   unlockAudio(); releaseInput(); stepper.reset(); lastTime = 0;
   if (game.mode === 'paused') game.resume();
-  else { game.start(); renderer.reset(); usedDrag = false; toastUntil = 0; recordedResult = null; lastHudTime = -1; $('toast').classList.remove('visible'); }
+  else { audio?.reset(); game.start(); renderer.reset(); usedDrag = false; toastUntil = 0; recordedResult = null; lastHudTime = -1; $('toast').classList.remove('visible'); }
   syncUI(); canvas.focus({ preventScroll: true });
 }
 function selectLevel(id) {
@@ -143,6 +143,9 @@ function frame(now) {
   const dt = lastTime ? clamp((now - lastTime) / 1000, 0, .25) : 0; lastTime = now;
   if (!document.hidden) {
     visualTime += dt; if (game.mode === 'playing') stepper.advance(dt);
+    // Age existing visuals first so a newly killed one-hit enemy gets at least
+    // one bright-edge frame even when this render frame took more than 35 ms.
+    if (game.mode !== 'paused') renderer.update(dt);
     const events = game.drainEvents();
     audio?.playBatch(events, muted);
     for (const event of events) {
@@ -162,7 +165,7 @@ function frame(now) {
       if (event.type === 'warning') toast('红色区域即将开火，向旁边躲！', 1.2);
     }
     if (visualTime > toastUntil) $('toast').classList.remove('visible');
-    if (game.mode !== 'paused') renderer.update(dt); renderer.draw(game, visualTime); syncUI();
+    renderer.draw(game, visualTime); syncUI();
     frameCount++; fpsTime += dt; if (fpsTime >= 1) { fps = frameCount / fpsTime; frameCount = 0; fpsTime = 0; }
   }
   requestAnimationFrame(frame);

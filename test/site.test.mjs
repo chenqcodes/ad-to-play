@@ -6,7 +6,7 @@ test('both game routes have an explicit reciprocal navigation link', async () =>
   const home = await readFile(new URL('index.html', root), 'utf8');
   const pin = await readFile(new URL('games/pin-rescue/index.html', root), 'utf8');
   assert.match(home, /href="\.\/games\/pin-rescue\/"/); assert.match(pin, /href="\/"/);
-  assert.match(pin, /Ad to Play/); assert.match(home, /火力体验版 0.4/);
+  assert.match(pin, /Ad to Play/); assert.match(home, /打击反馈版 0.5/);
 });
 test('static runtime imports resolve locally and local server serves ES modules', async () => {
   for (const file of ['src/main.js', 'src/render.js', 'games/pin-rescue/main.mjs']) {

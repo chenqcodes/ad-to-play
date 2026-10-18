@@ -48,7 +48,7 @@ async function harness() {
   globalThis.requestAnimationFrame = fn => { callback = fn; };
   globalThis.location = { search: '?qa=1' };
   await import(`../src/main.js?harness=${++run}`);
-  const frame = (count = 1) => { for (let i = 0; i < count; i++) { now += 1000 / 60; callback(now); } };
+  const frame = (count = 1, fps = 60) => { for (let i = 0; i < count; i++) { now += 1000 / fps; callback(now); } };
   const click = id => dispatch(elements.get(id), 'click');
   return { elements, frame, click, dispatch, stored, vibrations, game: window.__NEON_QA__.game, qa: window.__NEON_QA__, get audioContexts() { return audioContexts; } };
 }
@@ -154,4 +154,18 @@ test('damage feedback names the actual hazard rather than always blaming a red w
   assert.match(h.elements.get('toast').textContent, /红色预警/);
   h.game.addSquad(-1, 'gate'); h.frame();
   assert.match(h.elements.get('toast').textContent, /数字门扣员/);
+});
+
+
+test('new one-hit death proxies keep their bright-edge first frame even at20fps', async () => {
+  const h = await harness(); h.click('start-button'); h.frame();
+  h.game.nextWave = h.game.level.waves.length; h.game.nextGate = h.game.level.gates.length;
+  h.game.nextSupportIndex = 2; h.game.fireTimer = 999; h.game.bullets.clear(); h.game.enemies.clear();
+  const target = h.game.enemies.take({ id: 99, active: true, x: 0, z: 200, hp: 1, maxHP: 1, speed: 0, radius: .04, hit: 0 });
+  h.game.damageEnemy(target, 1, { weapon: 'rifle', vx: 0 }); h.frame(1, 20);
+  const proxy = h.qa.renderer.deathProxies.items.find(p => p.active);
+  assert.ok(proxy); assert.equal(proxy.age, 0); assert.equal(h.qa.renderer.deathPose(proxy).stage, 'edge');
+  assert.equal(h.game.enemies.count, 0); assert.equal(h.qa.renderer.drawStats.deaths, 1);
+  h.click('pause-button'); h.frame(5, 20); assert.equal(proxy.age, 0);
+  h.click('start-button'); h.frame(6, 20); assert.equal(h.qa.renderer.deathProxies.count, 0);
 });

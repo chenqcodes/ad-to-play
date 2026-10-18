@@ -3,6 +3,7 @@ export const CONFIG = Object.freeze({
   step: 1 / 120, maxFrameDelta: .25,
   initialSquad: 4, maxSquad: 42, maxRapid: 2, rapidBonus: .35,
   maxBullets: 768, maxEnemies: 240,
+  chainDelay: .1, maxChainSalvos: 5, maxPendingChains: 210,
   moveSpeed: 3.8, roadSpeed: 142, bulletSpeed: 780, fireInterval: .28,
   spawnZ: 880, gateZ: 30, playerRadius: .15,
   contactGrace: .45, bossAt: 42, bossHP: 1200, duration: 60,
@@ -62,6 +63,7 @@ export const LEVELS = Object.freeze([
       { at: 27.1, x: 0, z: 200, count: 16, rows: 6, spacing: .108, rowSpacing: 20, speed: 120, hp: 1, gap: .15, gapX: .3 },
       { at: 32.1, x: 0, z: 340, count: 16, rows: 8, spacing: .108, rowSpacing: 20, speed: 104, hp: 1, gap: .14, gapX: -.28 },
       { at: 34.5, x: 0, z: 220, count: 18, rows: 4, spacing: .095, rowSpacing: 22, speed: 130, hp: 1, gap: .15, gapX: -.3 },
+      { at: 41, x: 0, z: 280, count: 16, rows: 3, spacing: .108, rowSpacing: 24, speed: 108, hp: 1, gap: .15, gapX: .3, showcase: true },
       { at: 44, x: 0, z: 680, count: 15, rows: 4, spacing: .11, rowSpacing: 25, speed: 95, hp: 1, gap: .14, gapX: .3 },
       { at: 50, x: 0, z: 670, count: 15, rows: 4, spacing: .11, rowSpacing: 25, speed: 100, hp: 1, gap: .14, gapX: -.3 },
     ]),
@@ -87,6 +89,7 @@ export const LEVELS = Object.freeze([
       { at: 27.1, x: 0, z: 200, count: 16, rows: 6, spacing: .108, rowSpacing: 20, speed: 120, hp: 1, gap: .15, gapX: .3 },
       { at: 32.1, x: 0, z: 340, count: 18, rows: 8, spacing: .095, rowSpacing: 20, speed: 104, hp: 1, gap: .14, gapX: .3 },
       { at: 34.5, x: 0, z: 220, count: 18, rows: 4, spacing: .095, rowSpacing: 22, speed: 130, hp: 1, gap: .15, gapX: -.3 },
+      { at: 41, x: 0, z: 280, count: 16, rows: 3, spacing: .108, rowSpacing: 24, speed: 108, hp: 1, gap: .15, gapX: .3, showcase: true },
       { at: 44, x: 0, z: 680, count: 17, rows: 4, spacing: .1, rowSpacing: 25, speed: 95, hp: 1, gap: .14, gapX: -.3 },
       { at: 50, x: 0, z: 670, count: 17, rows: 4, spacing: .1, rowSpacing: 25, speed: 100, hp: 1, gap: .14, gapX: .3 },
     ]),
@@ -112,6 +115,7 @@ export const LEVELS = Object.freeze([
       { at: 27.1, x: 0, z: 200, count: 16, rows: 6, spacing: .108, rowSpacing: 20, speed: 120, hp: 1, gap: .15, gapX: .3 },
       { at: 32.1, x: 0, z: 340, count: 18, rows: 8, spacing: .095, rowSpacing: 20, speed: 104, hp: 1, gap: .14, gapX: -.3, heavyEvery: 35, heavyHP: 10 },
       { at: 34.5, x: 0, z: 220, count: 18, rows: 4, spacing: .095, rowSpacing: 22, speed: 130, hp: 1, gap: .15, gapX: -.3 },
+      { at: 41, x: 0, z: 280, count: 16, rows: 3, spacing: .108, rowSpacing: 24, speed: 108, hp: 1, gap: .15, gapX: .3, showcase: true },
       { at: 44, x: 0, z: 680, count: 17, rows: 4, spacing: .1, rowSpacing: 25, speed: 95, hp: 1, gap: .14, gapX: .3 },
       { at: 50, x: 0, z: 670, count: 17, rows: 4, spacing: .1, rowSpacing: 25, speed: 100, hp: 1, gap: .14, gapX: -.3 },
     ]),
@@ -187,7 +191,7 @@ export class Game {
     this.mode = mode; this.time = 0; this.x = 0; this.targetX = 0;
     this.squad = this.level.initialSquad; this.maxSquad = this.squad; this.rapid = 0; this.weapon = 'rifle'; this.weaponTier = 0; this.nextSupportIndex = 0; this.volleySerial = 0;
     this.fireTimer = 0; this.hurtUntil = 0; this.nextGate = 0; this.nextWave = 0; this.enemySerial = 0;
-    this.gates = []; this.pendingEnemies = []; this.boss = null; this.result = null; this.route = []; this.lastHitSource = null;
+    this.gates = []; this.pendingEnemies = []; this.pendingChains = []; this.boss = null; this.result = null; this.route = []; this.lastHitSource = null;
     this.bullets.clear(); this.enemies.clear(); this.events.length = 0;
     this.stats = { kills: 0, recruits: 0, gates: 0, upgrades: 0, shots: 0, damage: 0, hitsTaken: 0, dodges: 0, gateGrowth: 0, powerUps: 0, reloads: 0, spawned: 0, peakEnemies: 0 };
     this.metrics = { collisionChecks: 0, splashChecks: 0, maxCollisionChecks: 0, maxSplashChecks: 0, steps: 0 };
@@ -219,9 +223,17 @@ export class Game {
   setTarget(x) { if (Number.isFinite(x)) this.targetX = clamp(x, -.79, .79); }
   emit(type, details = {}) {
     if (this.events.length >= 256) {
-      if (['hit', 'hitBoss', 'gateHit', 'fire', 'explosion'].includes(type)) return;
-      const cosmetic = this.events.findIndex(event => ['hit', 'hitBoss', 'gateHit', 'fire', 'explosion'].includes(event.type));
-      this.events.splice(cosmetic < 0 ? 0 : cosmetic, 1);
+      const cosmeticTypes = ['hit', 'hitBoss', 'gateHit', 'fire'];
+      if (cosmeticTypes.includes(type)) return;
+      const sameBlast = event => event.type === 'explosion' && event.batch === details.batch && event.chain === details.chain && event.time === details.time;
+      // Keep a real primary/chain beat for every salvo/tick, including under effect pressure.
+      if (type === 'explosion' && this.events.some(sameBlast)) return;
+      let disposable = this.events.findIndex(event => cosmeticTypes.includes(event.type));
+      if (disposable < 0) disposable = this.events.findIndex((event, index) => event.type === 'explosion' &&
+        this.events.some((other, otherIndex) => otherIndex !== index && other.type === 'explosion' &&
+          other.batch === event.batch && other.chain === event.chain && other.time === event.time));
+      if (disposable < 0) disposable = this.events.findIndex(event => !['explosion', 'win', 'lose', 'power'].includes(event.type));
+      this.events.splice(disposable < 0 ? 0 : disposable, 1);
     }
     this.events.push({ type, ...details });
   }
@@ -265,7 +277,7 @@ export class Game {
   }
   finish(won, reason = 'boss') {
     if (this.mode !== 'playing') return;
-    this.mode = won ? 'won' : 'lost';
+    this.mode = won ? 'won' : 'lost'; this.pendingChains.length = 0;
     const cause = reason === 'squad' ? (this.lastHitSource === 'boss' ? '被守卫光束击中，提前离开红色预警区' : this.lastHitSource === 'heavy' ? '被重装敌人撞散，集中火力或提前绕开' : '被敌人撞散，射击清路或横移避开') : CAUSES[reason] ?? reason;
     this.result = { won, reason, cause, lastHitSource: this.lastHitSource, time: this.time, squad: this.squad, maxSquad: this.maxSquad,
       rapid: this.rapid, weapon: this.weapon, weaponTier: this.weaponTier, levelId: this.level.id, progress: won ? 1 : clamp(this.boss ? .7 + .29 * (1 - this.boss.hp / this.boss.maxHP) : .7 * this.time / this.level.bossAt, 0, .99), route: [...this.route], ...this.stats };
@@ -282,7 +294,7 @@ export class Game {
       const values = {
         id: ++this.enemySerial, x, z: (def.z ?? CONFIG.spawnZ) + row * (def.rowSpacing ?? 52),
         hp, maxHP: hp, radius: heavy ? .085 : .044, speed: def.speed ?? CONFIG.roadSpeed, hit: 0, phase: def.at + i,
-        heavy, fodder: !heavy, row, wave: def.at, damage: def.damage ?? (heavy ? 4 : 1),
+        heavy, fodder: !heavy, showcase: Boolean(def.showcase), row, wave: def.at, damage: def.damage ?? (heavy ? 4 : 1),
       };
       // Catch-up/debug time jumps age waves rather than materializing expired packs.
       if (this.time - def.at > CONFIG.step * 2) values.z -= values.speed * (this.time - def.at);
@@ -298,7 +310,12 @@ export class Game {
     const w = this.weaponDefinition, expectedCount = this.squad * w.pellets;
     // An entire real volley is deferred rather than partially dropping members or crashing.
     // Exhaustive normal cadence/transition tests verify this branch is never needed in play.
-    if (this.bullets.count + expectedCount > this.bullets.capacity) {
+    // Reserve every chain slot for the whole salvo before emitting a single round.
+    // Five salvos cover the longest tier2 cannon lifetime + delay at rapid2.
+    const chainRounds = w.chain ? this.bullets.items.filter(b => b.active && b.chain) : [];
+    const chainBatches = w.chain ? new Set([...chainRounds, ...this.pendingChains].map(entry => entry.batch)) : null;
+    if (this.bullets.count + expectedCount > this.bullets.capacity || (w.chain &&
+      (chainBatches.size >= CONFIG.maxChainSalvos || chainRounds.length + this.pendingChains.length + expectedCount > CONFIG.maxPendingChains))) {
       this.stats.reloads++; this.emit('reload', { expectedCount, weapon: this.weapon }); return false;
     }
     const batch = ++this.volleySerial; let fired = 0;
@@ -329,10 +346,21 @@ export class Game {
     if (growth) this.emit('gateGrow', { x, z, value: effect.value, amount: growth, capped: effect.value >= effect.maxValue });
     this.emit('gateHit', { x, z, value: effect.value, progress: effect.shotProgress, cost: effect.shotCost, cap: effect.maxValue });
   }
-  damageEnemy(enemy, amount, bullet = {}) {
+  damageEnemy(enemy, amount, bullet = {}, impact = 'direct', center = null) {
+    if (!enemy.active) return;
     const actual = Math.min(enemy.hp, amount); enemy.hp = Math.max(0, enemy.hp - amount); enemy.hit = .08; this.stats.damage += actual;
     this.emit('hit', { x: enemy.x, z: enemy.z });
-    if (enemy.hp <= 1e-8) { enemy.hp = 0; enemy.active = false; this.stats.kills++; this.emit('kill', { enemyId: enemy.id, heavy: enemy.heavy, weapon: bullet.weapon ?? this.weapon, tier: bullet.tier ?? this.weaponTier, batch: bullet.batch ?? 0, x: enemy.x, z: enemy.z }); }
+    if (enemy.hp <= 1e-8) {
+      // Direction is event data only. The collision body retires on this exact tick.
+      // Longitudinal road units are scaled to lane units before radial normalization.
+      const dx = center ? enemy.x - center.x : 0, dz = center ? (enemy.z - center.z) / 300 : 0;
+      const length = Math.hypot(dx, dz);
+      const dirX = center ? (length > 1e-9 ? dx / length : 0) : clamp(bullet.vx ?? 0, -1, 1);
+      const dirZ = center ? (length > 1e-9 ? dz / length : 1) : 1;
+      enemy.hp = 0; enemy.active = false; this.stats.kills++;
+      this.emit('kill', { enemyId: enemy.id, heavy: enemy.heavy, weapon: bullet.weapon ?? this.weapon, tier: bullet.tier ?? this.weaponTier,
+        batch: bullet.batch ?? 0, x: enemy.x, z: enemy.z, dirX, dirZ, impact, time: this.time });
+    }
   }
   damageBoss(amount, x) {
     const b = this.boss; this.stats.damage += Math.min(b.hp, amount); b.hp = Math.max(0, b.hp - amount); b.hit = .06;
@@ -342,25 +370,42 @@ export class Game {
     return this.gates.some(row => !row.resolved && row.z > Math.min(from.z, enemy.z) && row.z < Math.max(from.z, enemy.z) &&
       ((row.left.shootable && Math.abs(enemy.x + .49) <= .39) || (row.right.shootable && Math.abs(enemy.x - .49) <= .39)));
   }
+  blast(center, radius, depth, limit, hit, round, chain = false) {
+    this.emit('explosion', { x: center.x, z: center.z, radius, depth, tier: round.tier ?? 0,
+      batch: round.batch ?? 0, time: this.time, chain });
+    const nearby = [];
+    this.enemyGrid.query(center.x - radius, center.x + radius, center.z - depth, center.z + depth, enemy => {
+      this.metrics.splashChecks++;
+      if (!hit.has(enemy.id) && Math.abs(enemy.x - center.x) <= radius && Math.abs(enemy.z - center.z) <= depth && !this.blastBlocked(center, enemy)) nearby.push(enemy);
+    });
+    nearby.sort((a, b) => Math.abs(a.z - center.z) - Math.abs(b.z - center.z) || a.id - b.id);
+    let last = null;
+    for (const enemy of nearby.slice(0, limit)) {
+      hit.add(enemy.id); this.damageEnemy(enemy, round.damage * .7, round, chain ? 'chain' : 'blast', center);
+      last = { x: enemy.x, z: enemy.z, id: enemy.id };
+    }
+    return last;
+  }
   explode(bullet, target) {
     const w = { ...WEAPON_TIERS.cannon[bullet.tier ?? 0], ...Object.fromEntries(Object.entries(bullet).filter(([, value]) => value !== undefined)) };
-    const hit = new Set([target.id]); let chainTarget = null;
-    const blast = (center, radius, depth, limit, chain) => {
-      this.emit('explosion', { x: center.x, z: center.z, radius, depth, tier: bullet.tier ?? 0, chain });
-      const nearby = [];
-      this.enemyGrid.query(center.x - radius, center.x + radius, center.z - depth, center.z + depth, enemy => {
-        this.metrics.splashChecks++;
-        if (!hit.has(enemy.id) && Math.abs(enemy.x - center.x) <= radius && Math.abs(enemy.z - center.z) <= depth && !this.blastBlocked(center, enemy)) nearby.push(enemy);
-      });
-      nearby.sort((a, b) => Math.abs(a.z - center.z) - Math.abs(b.z - center.z) || a.id - b.id);
-      for (const enemy of nearby.slice(0, limit)) {
-        hit.add(enemy.id); this.damageEnemy(enemy, bullet.damage * .7, bullet);
-        // The last affected body carries one secondary blast further into the pack.
-        chainTarget = { x: enemy.x, z: enemy.z, id: enemy.id };
-      }
-    };
-    blast(target, w.splashRadius, w.splashDepth, w.splashLimit - 1, false);
-    if (w.chain && chainTarget) blast(chainTarget, w.chainRadius, w.chainDepth, w.chainLimit, true);
+    const hit = new Set([target.id]);
+    const chainTarget = this.blast(target, w.splashRadius, w.splashDepth, w.splashLimit - 1, hit, bullet);
+    if (w.chain && chainTarget) {
+      // Value snapshots survive projectile/enemy pool reuse and later weapon switches.
+      // Slots were reserved for the entire real salvo in fire(), not per explosion.
+      this.pendingChains.push({ at: this.time + CONFIG.chainDelay, x: chainTarget.x, z: chainTarget.z,
+        sourceId: chainTarget.id, hitIds: [...hit], weapon: bullet.weapon ?? 'cannon', tier: bullet.tier ?? 0,
+        batch: bullet.batch ?? 0, damage: bullet.damage, radius: w.chainRadius, depth: w.chainDepth, limit: w.chainLimit });
+    }
+  }
+  resolveChains() {
+    // Never call explode() here: delayed blasts are one-hop and cannot recurse.
+    const waiting = [];
+    for (const chain of this.pendingChains) {
+      if (chain.at > this.time + 1e-9) { waiting.push(chain); continue; }
+      this.blast(chain, chain.radius, chain.depth, chain.limit, new Set(chain.hitIds), chain, true);
+    }
+    this.pendingChains = waiting;
   }
   update(dt) {
     if (this.mode !== 'playing' || !Number.isFinite(dt) || dt <= 0) return;
@@ -404,6 +449,7 @@ export class Game {
       this.pendingEnemies = waiting;
     }
     this.enemyGrid.rebuild(this.enemies.items);
+    this.resolveChains();
     if (!this.boss && this.time >= this.level.bossAt) {
       this.boss = { hp: this.level.bossHP, maxHP: this.level.bossHP, x: 0, z: 780, radius: .29, hit: 0,
         nextAttack: this.time + 1.2, attack: null, enraged: false };
